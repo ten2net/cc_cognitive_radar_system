@@ -3,7 +3,7 @@ name = "cognitive_radar"
 version = "0.1.0"
 description = "Cognitive Radar System using Reinforcement Learning"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = "==3.10"
 license = {text = "MIT"}
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
@@ -35,7 +35,7 @@ dependencies = [
     "pandas>=2.3.1",
     "pyant>=0.13.1",
     "gymnasium>=0.29.1",
-    "rsl-rl>=0.1.0",
+    "rsl-rl-lib==3.0.0",
 
 ]
 
@@ -50,8 +50,6 @@ train-radar = "cognitive_radar.train:main"
 eval-radar = "cognitive_radar.evaluate:main"
 
 [tool.uv]
-# UV 特定配置
-lockfile = "uv.lock"
 resolution-strategy = "highest"
 
 [build-system]
