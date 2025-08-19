@@ -1,0 +1,59 @@
+[project]
+name = "cognitive_radar"
+version = "0.1.0"
+description = "Cognitive Radar System using Reinforcement Learning"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "numpy>=2.0.0",
+    "scipy>=1.9.0",
+    "trimesh>=3.15.0",    
+    "pymeshlab==2022.2", 
+    "pyvista>=0.36.0",
+    "meshio>=5.0.0",
+    "PyYAML>=6.0.2",
+    "pytest>=8.4.1",
+    "plotly>=6.2.0",
+    "kaleido==1.0.0",
+    "nbformat>=4.2.0",
+    "lark>=1.2.2",
+    "pandas>=2.3.1",
+    "pyant>=0.13.1",
+    "gymnasium>=0.29.1",
+    "rsl-rl>=0.1.0",
+
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.1",
+    "ipykernel>=7.0.0"
+]
+
+[project.scripts]
+train-radar = "cognitive_radar.train:main"
+eval-radar = "cognitive_radar.evaluate:main"
+
+[tool.uv]
+# UV 特定配置
+lockfile = "uv.lock"
+resolution-strategy = "highest"
+
+[build-system]
+requires = ["uv_build"]  
+build-backend = "uv_build"  

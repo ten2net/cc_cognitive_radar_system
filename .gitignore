@@ -1,0 +1,26 @@
+# UV artifacts
+uv.lock
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build artifacts
+/dist/
+/build/
+*.egg-info/
+
+# Notebook checkpoints
+.ipynb_checkpoints
+
+# Environment variables
+.env
+
+# Data files
+/data/
+/results/
+
+# Logs
+logs/
+*.log

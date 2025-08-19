@@ -1,0 +1,25 @@
+# Cognitive Radar Configuration
+
+radar:
+  type: fmcw_77ghz
+  params:
+    frequency: 77e9
+    bandwidth: 1e9
+    chirp_time: 50e-6
+    pulses: 128
+
+environment:
+  max_steps: 500
+  state_dim: 256
+  action_dim: 3
+  reward_weights:
+    detection: 1.0
+    power: -0.01
+    interference: -0.5
+
+training:
+  algorithm: ppo
+  epochs: 1000
+  batch_size: 128
+  learning_rate: 3e-4
+  gamma: 0.99
