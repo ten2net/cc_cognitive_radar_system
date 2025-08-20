@@ -1,0 +1,172 @@
+# 脉冲多普勒低慢小目标监视雷达配置文件
+# 最后更新: 2025-08-04 wangf
+radars:
+  # 1. 基础型低空监视雷达
+  PD-LS01:
+    radar_type: "基础型低空监视雷达"
+    frequency: [2.9e9, 2.915e9]  # X波段频率范围(Hz)
+    pulse_width: 30e-6          # 脉冲宽度(s)
+    tx_power: 500            # 发射功率(W)
+    pulses: 128                # 脉冲个数
+    prp: 200e-6                # 脉冲重复间隔(s)
+    fs: 40e6                   # 采样率(Hz)
+    rf_gain: 30                # 总RF增益 (dB)
+    baseband_gain: 40          # 基带增益 (dB)
+    max_unambiguous_range: 30000 # 最大不模糊距离(m)
+    max_unambiguous_speed: 75 # 最大不模糊速度(m/s)
+    location: [0, 0, 0]        # 部署位置[x, y, z](m)
+    speed: [0, 0, 0]           # 运动速度[vx, vy, vz](m/s)
+    description: "用于一般低空区域监视，具备自适应MTI滤波能力"
+  
+  # 2. 机动型便携雷达
+  PD-LS02:
+    radar_type: "机动型便携雷达"
+    frequency: [9.4e9, 9.6e9]  # X波段频率范围(Hz)
+    pulse_width: 0.5e-6
+    tx_power: 200
+    pulses: 32                 # 脉冲个数    
+    prp: 100e-6
+    fs: 40e6
+    rf_gain: 30                # 总RF增益 (dB)
+    baseband_gain: 40          # 基带增益 (dB)    
+    max_unambiguous_range: 7500
+    max_unambiguous_speed: 47.4
+    location: [50, 30, 3]
+    speed: [5, 0, 0]
+    description: "50kg级便携式设计，快速部署能力"
+  
+  # 3. 高分辨率城市雷达
+  PD-LS03:
+    radar_type: "高分辨率城市监控雷达"
+    frequency: [13.5e9, 14e9]  # Ku波段频率范围(Hz)
+    pulse_width: 0.2e-6
+    tx_power: 500
+    pulses: 32                 # 脉冲个数    
+    prp: 20e-6
+    fs: 100e6
+    rf_gain: 30                # 总RF增益 (dB)
+    baseband_gain: 40          # 基带增益 (dB)    
+    max_unambiguous_range: 3000
+    max_unambiguous_speed: 275
+    location: [100, 80, 50]
+    speed: [0, 0, 0]
+    description: "专为城市环境优化，具备建筑物多径抑制算法"
+  
+  # 4. 长程低空预警雷达
+  PD-LS04:
+    radar_type: "长程低空预警雷达"
+    frequency: [1.2e9, 1.4e9]  # L波段频率范围(Hz)
+    pulse_width: 10e-6
+    tx_power: 500
+    pulses: 32                 # 脉冲个数    
+    prp: 500e-6
+    fs: 5e6
+    rf_gain: 30                # 总RF增益 (dB)
+    baseband_gain: 40          # 基带增益 (dB)    
+    max_unambiguous_range: 75000
+    max_unambiguous_speed: 115
+    location: [0, 0, 30]
+    speed: [0, 0, 0]
+    description: "远程低空监视，气象杂波抑制能力"
+  
+  # 5. 反无人机专用雷达
+  PD-LS05:
+    radar_type: "反无人机专用雷达"
+    frequency: [5.4e9, 5.9e9]  # C波段频率范围(Hz)
+    pulse_width: 0.1e-6
+    tx_power: 80
+    pulses: 32                 # 脉冲个数    
+    prp: 100e-6
+    fs: 200e6
+    rf_gain: 30                # 总RF增益 (dB)
+    baseband_gain: 40          # 基带增益 (dB)    
+    max_unambiguous_range: 15000
+    max_unambiguous_speed: 135
+    location: [50, 50, 10]
+    speed: [0, 0, 0]
+    description: "微型无人机探测，微多普勒特征识别技术"
+  
+  # 6. 海岸监视雷达
+  PD-LS06:
+    radar_type: "海岸监视雷达"
+    frequency: [3.0e9, 3.2e9]  # S波段频率范围(Hz)
+    pulse_width: 5e-6
+    tx_power: 150
+    pulses: 32                 # 脉冲个数    
+    prp: 300e-6
+    fs: 15e6
+    rf_gain: 30                # 总RF增益 (dB)
+    baseband_gain: 40          # 基带增益 (dB)    
+    max_unambiguous_range: 45000
+    max_unambiguous_speed: 83.3
+    location: [0, 0, 20]
+    speed: [0, 0, 0]
+    description: "海杂波自适应抑制，抗盐雾腐蚀设计"
+  
+  # 7. 低功耗边境巡逻雷达
+  PD-LS07:
+    radar_type: "低功耗边境巡逻雷达"
+    frequency: [3.0e9, 3.2e9]  # S波段频率范围(Hz)
+    pulse_width: 2e-6
+    tx_power: 100
+    pulses: 32                 # 脉冲个数    
+    prp: 1e-3
+    fs: 10e6
+    rf_gain: 30                # 总RF增益 (dB)
+    baseband_gain: 40          # 基带增益 (dB)    
+    max_unambiguous_range: 150000
+    max_unambiguous_speed: 25
+    location: [0, 0, 5]
+    speed: [0, 0, 0]
+    description: "太阳能供电，低截获概率运行模式"
+  
+  # 8. 机场跑道监控雷达
+  PD-LS08:
+    radar_type: "机场跑道监控雷达"
+    frequency: [9.3e9, 9.7e9]  # X波段频率范围(Hz)
+    pulse_width: 0.8e-6
+    tx_power: 50
+    pulses: 32                 # 脉冲个数    
+    prp: 250e-6
+    fs: 30e6
+    rf_gain: 30                # 总RF增益 (dB)
+    baseband_gain: 40          # 基带增益 (dB)    
+    max_unambiguous_range: 37500
+    max_unambiguous_speed: 31.6
+    location: [0, 0, 10]
+    speed: [0, 0, 0]
+    description: "跑道入侵实时告警，符合ICAO Annex 14标准"
+  
+  # 9. 多功能战术雷达
+  PD-LS09:
+    radar_type: "多功能战术雷达"
+    frequency: [5.0e9, 6.0e9]  # C波段频率范围(Hz)
+    pulse_width: 5e-6           # 默认脉宽
+    tx_power: 200
+    pulses: 32                 # 脉冲个数    
+    prp: 200e-6                 # 默认prp
+    fs: 60e6
+    rf_gain: 30                # 总RF增益 (dB)
+    baseband_gain: 40          # 基带增益 (dB)    
+    max_unambiguous_range: 15000
+    max_unambiguous_speed: 135
+    location: [0, 0, 15]
+    speed: [10, 0, 0]
+    description: "支持SAR成像模式，电子对抗(ECCM)能力"
+  
+  # 10. 微型无人机探测雷达
+  PD-LS10:
+    radar_type: "微型无人机探测雷达"
+    frequency: [34e9, 36e9]     # Ka波段频率范围(Hz)
+    pulse_width: 0.05e-6
+    tx_power: 500
+    pulses: 32                 # 脉冲个数    
+    prp: 40e-6
+    fs: 400e6
+    rf_gain: 30                # 总RF增益 (dB)
+    baseband_gain: 40          # 基带增益 (dB)    
+    max_unambiguous_range: 6000
+    max_unambiguous_speed: 53.75
+    location: [0, 0, 5]
+    speed: [0, 0, 0]
+    description: "微型化设计，深度学习目标分类"

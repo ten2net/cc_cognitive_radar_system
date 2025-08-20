@@ -3,7 +3,7 @@ name = "cognitive_radar"
 version = "0.1.0"
 description = "Cognitive Radar System using Reinforcement Learning"
 readme = "README.md"
-requires-python = "==3.10"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
@@ -42,15 +42,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.4.1",
-    "ipykernel>=7.0.0"
+    "ipykernel<=7.0.0a2"
 ]
 
 [project.scripts]
 train-radar = "cognitive_radar.train:main"
 eval-radar = "cognitive_radar.evaluate:main"
-
-[tool.uv]
-resolution-strategy = "highest"
 
 [build-system]
 requires = ["uv_build"]  
