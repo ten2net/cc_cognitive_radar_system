@@ -14,7 +14,7 @@ class RadarFactory(ABC):
         """查看指定类型雷达的参数"""
         pass
     @abstractmethod
-    def create_radar(self, 
+    def create(self, 
                      radar_type, 
                      location: Tuple[float, float, float] = (0,0,0),  
                      speed: Tuple[float, float, float] = (0,0,0)) -> Radar :

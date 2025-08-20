@@ -27,7 +27,7 @@ class LowSlowSmallRadarSystem:
         :param weather_attenuation: 天气衰减 (dB/km)
         """
         self.radar_factory = radar_factory
-        self.radar = radar_factory.create_radar(radar_type)
+        self.radar = radar_factory.create(radar_type)
         self.radar_info = radar_factory.get_radar_info(radar_type)
         
         # 基本雷达参数

@@ -51,7 +51,7 @@ class DefaultRadarFactory(RadarFactory):
             'speed': config.speed
         }
     
-    def create_radar(self, 
+    def create(self, 
                      radar_type: str, 
                      location: Optional[Tuple[float, float, float]] = None,  
                      speed: Optional[Tuple[float, float, float]] = None) -> Radar:
@@ -158,7 +158,7 @@ def main():
     
     # 创建特定雷达实例
     radar_type = "PD-LS05"  # 反无人机专用雷达
-    radar = factory.create_radar(
+    radar = factory.create(
         radar_type,
         location=(100, 50, 10),  # 自定义位置
         speed=(0, 0, 0)          # 静止
