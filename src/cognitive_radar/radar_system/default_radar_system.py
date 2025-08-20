@@ -330,7 +330,7 @@ class LowSlowSmallRadarSystem:
         print("="*40)
         
 # 测试修复后的函数
-def test_fixed_functions():
+def main():
     # 创建雷达系统
     radar_system = LowSlowSmallRadarSystem(
         radar_type="PD-LS01",
@@ -367,4 +367,4 @@ def test_fixed_functions():
     radar_system.print_system_summary()
 
 if __name__ == "__main__":  
-    test_fixed_functions()        
+    main()        
