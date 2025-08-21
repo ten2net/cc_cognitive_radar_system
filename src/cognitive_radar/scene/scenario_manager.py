@@ -4,7 +4,81 @@ from collections import defaultdict
 import time
 
 from cognitive_radar.target.dynamic_targets import DynamicTarget, MotionModelType, SwarmTargets
-
+def convert_target_states(target_states):
+    """
+    将场景管理器返回的目标状态转换为标准目标字典列表
+    
+    Args:
+        target_states (list): scene.get_all_targets_state()返回的目标状态列表
+        
+    Returns:
+        list: 标准目标字典列表，每个字典包含:
+            - location: (x, y, z) 当前位置
+            - speed: (vx, vy, vz) 当前速度
+            - rcs: 雷达散射截面积
+            - phase: 相位（默认为0）
+    """
+    # 这里需要实现速度计算逻辑
+    # 由于原始状态只包含位置，我们需要计算速度
+    # 这需要存储历史位置信息
+    
+    # 创建一个字典来存储历史位置
+    if not hasattr(convert_target_states, "prev_positions"):
+        convert_target_states.prev_positions = {} # type: ignore
+        convert_target_states.prev_time = None # type: ignore
+    
+    current_time = time.time()
+    
+    # 如果没有历史时间，初始化并返回空速度
+    if convert_target_states.prev_time is None: # type: ignore
+        convert_target_states.prev_time = current_time # type: ignore
+        convert_target_states.prev_positions = {state['id']: state['position'] for state in target_states} # type: ignore
+        return [
+            {
+                'location': tuple(float(x) for x in state['position']),
+                'speed': (0, 0, 0),  # 初始速度为0
+                'rcs': state['rcs'],
+                'phase': 0
+            }
+            for state in target_states
+        ]
+    
+    # 计算时间差
+    dt = current_time - convert_target_states.prev_time # type: ignore
+    if dt <= 0:
+        dt = 0.1  # 避免除以0
+    
+    # 转换目标状态
+    converted_targets = []
+    for state in target_states:
+        target_id = state['id']
+        current_position = tuple(float(x) for x in state['position'])
+        
+        # 计算速度
+        if target_id in convert_target_states.prev_positions: # type: ignore
+            prev_position = convert_target_states.prev_positions[target_id] # type: ignore
+            # 速度 = (当前位置 - 上一位置) / 时间差
+            speed = (
+                float((current_position[0] - prev_position[0]) / dt),
+                float((current_position[1] - prev_position[1]) / dt),
+                float((current_position[2] - prev_position[2]) / dt)
+            )
+        else:
+            speed = (0, 0, 0)  # 新目标初始速度为0
+        
+        converted_targets.append({
+            'location': current_position,
+            'speed': speed,
+            'rcs': state['rcs'],
+            'phase': 0  # 相位默认为0
+        })
+    
+    # 更新历史位置和时间
+    convert_target_states.prev_positions = {state['id']: state['position'] for state in target_states} # type: ignore
+    convert_target_states.prev_time = current_time # type: ignore
+    
+    return converted_targets  
+  
 class ScenarioManager:
     """
     场景管理器类，用于管理多个动态目标和群体目标的创建、更新和状态跟踪
@@ -252,81 +326,9 @@ class ScenarioManager:
         self.target_creation_times.clear()
         self.target_end_times.clear()
         self.next_id = 1
-        
-def convert_target_states(target_states):
-    """
-    将场景管理器返回的目标状态转换为标准目标字典列表
-    
-    Args:
-        target_states (list): scene.get_all_targets_state()返回的目标状态列表
-        
-    Returns:
-        list: 标准目标字典列表，每个字典包含:
-            - location: (x, y, z) 当前位置
-            - speed: (vx, vy, vz) 当前速度
-            - rcs: 雷达散射截面积
-            - phase: 相位（默认为0）
-    """
-    # 这里需要实现速度计算逻辑
-    # 由于原始状态只包含位置，我们需要计算速度
-    # 这需要存储历史位置信息
-    
-    # 创建一个字典来存储历史位置
-    if not hasattr(convert_target_states, "prev_positions"):
-        convert_target_states.prev_positions = {} # type: ignore
-        convert_target_states.prev_time = None # type: ignore
-    
-    current_time = time.time()
-    
-    # 如果没有历史时间，初始化并返回空速度
-    if convert_target_states.prev_time is None: # type: ignore
-        convert_target_states.prev_time = current_time # type: ignore
-        convert_target_states.prev_positions = {state['id']: state['position'] for state in target_states} # type: ignore
-        return [
-            {
-                'location': tuple(float(x) for x in state['position']),
-                'speed': (0, 0, 0),  # 初始速度为0
-                'rcs': state['rcs'],
-                'phase': 0
-            }
-            for state in target_states
-        ]
-    
-    # 计算时间差
-    dt = current_time - convert_target_states.prev_time # type: ignore
-    if dt <= 0:
-        dt = 0.1  # 避免除以0
-    
-    # 转换目标状态
-    converted_targets = []
-    for state in target_states:
-        target_id = state['id']
-        current_position = tuple(float(x) for x in state['position'])
-        
-        # 计算速度
-        if target_id in convert_target_states.prev_positions: # type: ignore
-            prev_position = convert_target_states.prev_positions[target_id] # type: ignore
-            # 速度 = (当前位置 - 上一位置) / 时间差
-            speed = (
-                float((current_position[0] - prev_position[0]) / dt),
-                float((current_position[1] - prev_position[1]) / dt),
-                float((current_position[2] - prev_position[2]) / dt)
-            )
-        else:
-            speed = (0, 0, 0)  # 新目标初始速度为0
-        
-        converted_targets.append({
-            'location': current_position,
-            'speed': speed,
-            'rcs': state['rcs'],
-            'phase': 0  # 相位默认为0
-        })
-    
-    # 更新历史位置和时间
-    convert_target_states.prev_positions = {state['id']: state['position'] for state in target_states} # type: ignore
-    convert_target_states.prev_time = current_time # type: ignore
-    
-    return converted_targets        
+    def get_targets(self):
+      target_states = self.get_all_targets_state()        
+      return convert_target_states(target_states) 
         
 def main():
     # 创建场景管理器

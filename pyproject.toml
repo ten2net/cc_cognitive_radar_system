@@ -50,6 +50,7 @@ train-radar = "cognitive_radar.train:main"
 eval-radar = "cognitive_radar.evaluate:main"
 radar_system = "cognitive_radar.radar_system.default_radar_system:main"
 radar_factory = "cognitive_radar.radar_system.radar_factory:main"
+scene = "cognitive_radar.scene.scenario_manager:main"
 
 [build-system]
 requires = ["uv_build"]  

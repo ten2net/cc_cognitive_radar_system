@@ -141,7 +141,7 @@ class DefaultRadarFactory(RadarFactory):
             location=loc,
             speed=spd
         )
-
+        
 def main():
     # 创建雷达工厂
     factory = DefaultRadarFactory()
@@ -206,6 +206,6 @@ def main():
     
     # 11. 速度分辨率 - 通过配置信息
     print(f"速度分辨率: {config.velocity_resolution:.2f} m/s")    
-# 示例用法
+
 if __name__ == "__main__":
     main()
