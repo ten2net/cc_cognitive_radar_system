@@ -256,7 +256,8 @@ class RadarVisualizer:
     def render(self):
         """渲染当前帧"""
         if self.render_mode == 'human':
-            plt.pause(0.01)
+           plt.pause(0.01)
+           self.fig.savefig("demo.png")
         elif self.render_mode == 'rgb_array':
             return self.get_rgb_array()
     

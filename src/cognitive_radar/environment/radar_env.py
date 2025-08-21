@@ -326,7 +326,7 @@ class CognitiveRadarEnv(gym.Env):
 
         # Render if needed
         if self.render_mode is not None:
-            self.render()
+            print(">>>>>>>>>>>>>>>>>>>>>>>>",self.render() ,self.render_mode)
 
         return obs, reward, terminated, truncated, info
 
@@ -442,53 +442,6 @@ class CognitiveRadarEnv(gym.Env):
         from ..utils import RadarVisualizer
         self.visualizer = RadarVisualizer(
             render_mode=self.render_mode)  # type: ignore
-    # def _calculate_reward(self, obs_dict: Dict, radar_params: Dict, targets: List[Dict]) -> float:
-    #     """
-    #     Calculate the total reward for the current state and action in the radar environment.
-
-    #     The reward is composed of several components:
-    #     1. Detection reward: Incentivizes the detection of targets.
-    #     2. Power penalty: Penalizes excessive power usage.
-    #     3. Interference penalty: Penalizes interference in the radar signal.
-    #     4. Waveform reward: Rewards optimal waveform parameter settings.
-    #     5. Beam reward: Rewards alignment of the radar beam with targets.
-
-    #     Args:
-    #         obs_dict (Dict): A dictionary containing observation data from the radar.
-    #         radar_params (Dict): A dictionary of the current radar parameters.
-    #         targets (List[Dict]): A list of targets, each represented as a dictionary with target information.
-
-    #     Returns:
-    #         float: The total calculated reward based on the current state and action.
-    #     """
-    #     weights = self.reward_weights
-
-    #     # 1. Detection reward
-    #     detection_reward = self._calculate_detection_reward(obs_dict, targets) * weights['detection']
-    #     self.episode_detections += detection_reward
-
-    #     # 2. Power penalty
-    #     power_penalty = self._calculate_power_penalty(radar_params) * weights['power']
-    #     self.episode_power_usage += -power_penalty  # Since penalty is negative
-
-    #     # 3. Interference penalty
-    #     interference_penalty = self._calculate_interference_penalty(obs_dict) * weights['interference']
-
-    #     # 4. Waveform reward
-    #     waveform_reward = self._calculate_waveform_reward(radar_params) * weights['waveform']
-
-    #     # 5. Beam reward
-    #     beam_reward = self._calculate_beam_reward(targets, radar_params) * weights['beam']
-
-    #     total_reward = (
-    #         detection_reward +
-    #         power_penalty +
-    #         interference_penalty +
-    #         waveform_reward +
-    #         beam_reward
-    #     )
-
-    #     return total_reward
 
     def _calculate_reward(self, obs_dict: Dict, radar_params: Dict, targets: List[Dict]) -> float:
         """
