@@ -37,7 +37,7 @@ class RadarSimulator:
         return baseband + noise 
     
     def process_signals(self, baseband: np.ndarray) -> np.ndarray:
-        """Process raw radar signals - 保持原有实现不变"""
+        """Process raw radar signals - 修复多普勒处理"""
         
         # 计算每个脉冲的采样点数
         samples_per_pulse = self.radar.sample_prop["samples_per_pulse"]
@@ -52,22 +52,16 @@ class RadarSimulator:
         dop_window = signal.windows.hamming(pulses, sym=True)             
         
         # 进行距离FFT，使用窗函数和指定FFT点数
-        self.range_data = proc.range_fft(
-            baseband, 
-            rwin=range_window)
-        
-        # 多普勒FFT
-        self.doppler_data =proc.doppler_fft(self.range_data, 
-                                             dwin=dop_window)       
-        
-        # 距离-多普勒FFT
         range_fft_points = samples_per_pulse
         rd_map = proc.range_doppler_fft(
             baseband, 
             rwin=range_window,
             dwin=dop_window,
-            rn=range_fft_points,  # 使用更大的FFT点数
+            rn=range_fft_points,
             dn=pulses)  
+        
+        # 应用fftshift将零多普勒移到中心
+        rd_map = np.fft.fftshift(rd_map, axes=1)
         
         return rd_map.squeeze(0)
     
@@ -118,8 +112,9 @@ class RadarSimulator:
         params['prf'] = prf
         params['tx_power'] = self.radar.radar_prop['transmitter'].rf_prop["tx_power"]
         
-        # 计算波长
-        wavelength = speed_of_light / np.mean(params['frequency'])
+        # 计算波长 - 使用中心频率而不是平均频率
+        center_freq = np.mean(params['frequency'])
+        wavelength = speed_of_light / center_freq
         pulses = self.radar.radar_prop['transmitter'].waveform_prop["pulses"]
         
         # 正确的速度分辨率计算
@@ -134,6 +129,10 @@ class RadarSimulator:
         # 添加采样率和采样点数
         params['sampling_rate'] = self.radar.radar_prop['receiver'].bb_prop["fs"]
         params['samples_per_pulse'] = self.radar.sample_prop["samples_per_pulse"]
+        
+        # 添加中心频率和波长
+        params['center_frequency'] = center_freq
+        params['wavelength'] = wavelength
         
         return params
     
@@ -183,7 +182,7 @@ class RadarSimulator:
                     figsize: tuple = (12, 8), cmap: str = "jet",
                     save_path: str = None, show: bool = True):
         """
-        绘制专业级距离-多普勒图(RD图)，与提供的图片完全一致
+        绘制专业级距离-多普勒图(RD图)，修复速度轴映射
         """
         import matplotlib.pyplot as plt
         
@@ -195,14 +194,12 @@ class RadarSimulator:
         # 获取雷达参数
         params = self.get_current_radar_params()
         
-        max_doppler_velocity = 50  
+        # 使用计算出的最大不模糊速度
+        max_doppler_velocity = params['max_unambiguous_velocity']
         max_range = 3000  
-        bandwidth = params["bandwidth"]
-        prf = params["prf"]
-        pulses = params["pulses"]
         
         # 计算波长
-        wavelength = speed_of_light / np.mean(params['frequency']) 
+        wavelength = params['wavelength']
         
         # 计算距离和速度分辨率
         range_resolution = params['range_resolution']
@@ -221,6 +218,7 @@ class RadarSimulator:
         vmax = np.max(log_magnitude)
         
         # 创建热图 - 使用物理单位作为范围
+        # 注意：由于我们使用了fftshift，速度轴应该从负最大速度到正最大速度
         im = ax.imshow(log_magnitude, 
                 aspect='auto', 
                 cmap=cmap,
@@ -248,7 +246,7 @@ class RadarSimulator:
         ax.set_xticks(x_ticks)
         ax.set_xticklabels(x_labels)
         
-        y_ticks = np.arange(-max_doppler_velocity, max_doppler_velocity, 10)
+        y_ticks = np.arange(-max_doppler_velocity, max_doppler_velocity + 1, 10)
         y_labels = [f"{y:.1f}" for y in y_ticks]
         ax.set_yticks(y_ticks)
         ax.set_yticklabels(y_labels)
@@ -260,9 +258,9 @@ class RadarSimulator:
         ax.set_title(title, fontsize=14, pad=20)
         
         # 添加零多普勒线
-        # ax.axhline(y=0, color='r', linestyle='--', linewidth=2, alpha=0.8)
-        # ax.text(max_range * 0.02, max_doppler_velocity * 0.02, 
-        #         'Zero Doppler', color='r', fontsize=11, weight='bold')
+        ax.axhline(y=0, color='r', linestyle='--', linewidth=2, alpha=0.8)
+        ax.text(max_range * 0.02, max_doppler_velocity * 0.02, 
+                'Zero Doppler', color='r', fontsize=11, weight='bold')
         
         # 添加距离刻度标记 - 每100米标记一次
         for distance in range(0, int(max_range) + 100, 100):
@@ -271,9 +269,9 @@ class RadarSimulator:
         
         # 添加雷达参数信息 - 与图片完全一致
         param_text = (
-            f"Bandwidth: {bandwidth/1e6:.1f} MHz\n"
-            f"PRF: {prf/1e3:.1f} kHz\n"
-            f"Pulses: {pulses}\n"
+            f"Bandwidth: {params['bandwidth']/1e6:.1f} MHz\n"
+            f"PRF: {params['prf']/1e3:.1f} kHz\n"
+            f"Pulses: {params['pulses']}\n"
             f"Range Res: {range_resolution:.2f} m\n"
             f"Velocity Res: {velocity_resolution:.2f} m/s"
         )
