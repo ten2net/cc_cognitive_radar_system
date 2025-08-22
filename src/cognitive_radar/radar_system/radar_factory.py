@@ -139,7 +139,8 @@ class DefaultRadarFactory(RadarFactory):
             transmitter=tx,
             receiver=rx,
             location=loc,
-            speed=spd
+            speed=spd,
+            seed=42
         )
         
 def main():

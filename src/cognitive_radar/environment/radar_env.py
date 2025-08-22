@@ -528,6 +528,7 @@ class CognitiveRadarEnv(gym.Env):
         detection_threshold = noise_level + 2
         
         print("="*50)
+        print(processed_data.shape)
         print(f"噪声水平: {noise_level:.1f}dB, 检测阈值: {detection_threshold:.1f}dB")
         print(f"距离分辨率: {range_res:.3f}m, 多普勒分辨率: {doppler_res:.3f}m/s")
         
@@ -944,7 +945,7 @@ def main():
                     "start_position": [2000, 50, 50],
                     "end_position": [10000, 200, 100],
                     "cruise_speed": 30,
-                    "rcs": 1.0
+                    "rcs": 0.5
                 }
             },
             {
@@ -968,7 +969,7 @@ def main():
     print("初始信息:", info.keys())
 
     # 随机策略测试
-    for _ in range(100):
+    for _ in range(1):
         action = env.action_space.sample()
         obs, reward, terminated, truncated, info = env.step(action)
         print(f"奖励: {reward:.4f}, 终止: {terminated}, 截断: {truncated}")

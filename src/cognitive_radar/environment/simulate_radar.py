@@ -78,7 +78,8 @@ class RadarSimulator:
             rn=samples_per_pulse,
             dn=pulses)  
         
-        return normalize_rd_map(rd_map.squeeze(0))
+        return rd_map.squeeze(0)
+        # return normalize_rd_map(rd_map.squeeze(0))
     
     def get_observation(self, baseband: np.ndarray) -> Dict:
         """Generate observation from raw radar data"""
@@ -184,3 +185,148 @@ class RadarSimulator:
         params['max_unambiguous_velocity']  = prf * wavelength / 4      
     
         return params
+    def plot_rd_map(self, rd_map: np.ndarray = None, title: str = "Range-Doppler Map",
+                    figsize: tuple = (12, 8), cmap: str = "jet",
+                    save_path: str = None, show: bool = True):
+        """
+        绘制专业级距离-多普勒图(RD图)
+        
+        参数:
+            rd_map (np.ndarray): 距离-多普勒图数据，形状为(距离单元数, 多普勒单元数)
+            title (str): 图表标题
+            figsize (tuple): 图表尺寸(宽, 高)
+            cmap (str): 颜色映射名称
+            save_path (str): 图像保存路径（可选）
+            show (bool): 是否显示图像
+        """
+        # 导入放在方法内部
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import LogNorm
+        
+        if rd_map is None and self.last_obs is not None:
+            rd_map = self.last_obs['rd_map']
+        elif rd_map is None:
+            raise ValueError("No RD map available to plot")
+            
+        # 获取雷达参数
+        params = self.get_current_radar_params()
+        range_res = params.get('range_resolution', 1.0)
+        doppler_res = params.get('doppler_resolution', 1.0)
+        
+        # 获取矩阵尺寸
+        num_range_bins, num_doppler_bins = rd_map.shape
+        
+        # 计算幅度(取绝对值)
+        magnitude = np.abs(rd_map)
+        
+        # 创建图表和坐标轴
+        fig, ax = plt.subplots(figsize=figsize)
+        
+        # 使用对数尺度显示(更好地展示动态范围)
+        # 添加小偏移避免log(0)
+        log_magnitude = np.log10(magnitude + 1e-9)
+        
+        # 计算实际物理范围
+        max_range = 2500 #num_range_bins * range_res
+        max_doppler = num_doppler_bins * doppler_res / 2
+        
+        # 创建热图 - 使用物理单位作为范围
+        im = ax.imshow(log_magnitude, 
+                aspect='auto', 
+                cmap=cmap,
+                origin='lower',
+                extent=[0, max_range, -max_doppler, max_doppler])
+        
+        # 添加颜色条
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.set_label('Magnitude (dB)', fontsize=12)
+        
+        # 设置坐标轴标签
+        ax.set_xlabel('Range (m)', fontsize=12)
+        ax.set_ylabel('Velocity (m/s)', fontsize=12)
+        
+        # 动态设置距离刻度 - 根据max_range计算
+        # 计算合适的刻度数量和间隔
+        if max_range <= 500:
+            num_ticks = 6  # 小范围使用更多刻度
+            tick_step = max_range / (num_ticks - 1)
+        elif max_range <= 2000:
+            num_ticks = 5  # 中等范围使用5个刻度
+            tick_step = max_range / (num_ticks - 1)
+        else:
+            num_ticks = 5  # 大范围也使用5个刻度
+            tick_step = max_range / (num_ticks - 1)
+        
+        # 生成刻度位置和标签
+        x_ticks = [i * tick_step for i in range(num_ticks)]
+        x_labels = [str(int(tick)) for tick in x_ticks]
+        
+        # 设置距离刻度
+        ax.set_xticks(x_ticks)
+        ax.set_xticklabels(x_labels)
+        
+        # 设置多普勒刻度 - 根据参考图片的分布
+        y_ticks = [-max_doppler, -max_doppler/2, 0, max_doppler/2, max_doppler]
+        y_labels = [str(int(y)) for y in y_ticks]
+        ax.set_yticks(y_ticks)
+        ax.set_yticklabels(y_labels)
+        
+        # 添加网格
+        ax.grid(True, linestyle='--', alpha=0.3, color='gray')
+        
+        # 添加标题
+        ax.set_title(title, fontsize=14, pad=20)
+        
+        # 添加零多普勒线
+        ax.axhline(y=0, color='r', linestyle='--', linewidth=2, alpha=0.8)
+        ax.text(max_range * 0.02, max_doppler * 0.02, 
+                'Zero Doppler', color='r', fontsize=11, weight='bold')
+        
+        # 添加距离刻度标记 - 每100米标记一次
+        for distance in range(0, int(max_range) + 100, 100):
+            if distance <= max_range:
+                ax.axvline(x=distance, color='white', linestyle=':', alpha=0.5)
+                # 每500米添加一次文本标注
+                if distance % 500 == 0 and distance > 0:
+                    ax.text(distance + 10, max_doppler * 0.9, 
+                            f'{distance}m', color='white', fontsize=9, weight='bold')
+        
+        # 优化布局
+        plt.tight_layout()
+        
+        # 保存图像
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"RD map saved to {save_path}")
+        
+        # 显示图像
+        if show:
+            plt.show()
+        
+        return fig
+def main():
+    # 创建雷达仿真器
+    radar_sim = RadarSimulator("PD-LS01")
+
+    # 创建目标
+    target_1 = dict(location=(1000, 0, 100), speed=(-1.2, 0, 0), rcs=5.5, phase=0)
+    target_2 = dict(location=(2000, 0, 200), speed=(-0.5 , 0, 0), rcs=5.5, phase=0)
+    targets = [target_1, target_2]  
+
+    # 模拟雷达信号
+    baseband = radar_sim.simulate(targets)
+
+    # 处理信号
+    rd_map = radar_sim.process_signals(baseband)
+
+    # 绘制RD图
+    radar_sim.plot_rd_map(
+        rd_map=rd_map,
+        title="Radar Range-Doppler Map",
+        cmap="jet",
+        save_path="rd_map.png",
+        show=True
+    )
+    
+if __name__ == "__main__":
+    main()        
