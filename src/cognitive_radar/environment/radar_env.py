@@ -1,5 +1,6 @@
 import gymnasium as gym
 import numpy as np
+import math
 from typing import Dict, Tuple, Any, Optional, List
 
 from cognitive_radar.environment.simulate_radar import RadarSimulator
@@ -220,8 +221,12 @@ class CognitiveRadarEnv(gym.Env):
         params = {}
         
         # 波束控制 - 转换为浮点数
-        params['beam_az'] = float(flat_action[0] * self.max_beam_angle)
-        params['beam_el'] = float(flat_action[1] * self.max_beam_angle)
+        # 限制波束角度范围
+        max_az_angle = 60.0  # 最大方位角（度）
+        max_el_angle = 45.0  # 最大俯仰角（度）
+        
+        params['beam_az'] = float(np.clip(action[0] * max_az_angle, -max_az_angle, max_az_angle))
+        params['beam_el'] = float(np.clip(action[1] * max_el_angle, -max_el_angle, max_el_angle))
         
         # 波形参数
         freq_min, freq_max = map(float, self.frequency_range)
@@ -278,11 +283,11 @@ class CognitiveRadarEnv(gym.Env):
         # Get targets in standard format
         targets = self.scenario_manager.get_targets()
         
-        target_1 = dict(location=(150, 0, 0), speed=(-12, 0, 0), rcs=0.5, phase=0)
-        target_2 = dict(location=(95, 20, 0), speed=(-50, 0, 0), rcs=0.5, phase=0)
-        target_3 = dict(location=(30, -5, 0), speed=(-22, 0, 0), rcs=5, phase=0)
+        # target_1 = dict(location=(20 + 5*self.current_step, 0, 10 + 3*self.current_step), speed=(-1.2* self.current_step, 0, 0), rcs=0.5, phase=0)
+        # target_2 = dict(location=(70, 15*self.current_step, 8 + 2*self.current_step), speed=(-0.5 * self.current_step, 0, 0), rcs=0.5, phase=0)
+        # target_3 = dict(location=(30* self.current_step, -5, 0), speed=(-22, 0, 0), rcs=5, phase=0)
 
-        targets = [target_1, target_2]        
+        # targets = [target_1, target_2]        
         # print(">>>>>>>>>>>>>>targets", targets)
         # Run radar simulation
         baseband = self.simulator.simulate(targets)
@@ -326,7 +331,7 @@ class CognitiveRadarEnv(gym.Env):
 
         # Render if needed
         if self.render_mode is not None:
-            print(">>>>>>>>>>>>>>>>>>>>>>>>",self.render() ,self.render_mode)
+            self.render()
 
         return obs, reward, terminated, truncated, info
 
@@ -501,64 +506,217 @@ class CognitiveRadarEnv(gym.Env):
             "beam_reward":beam_reward,
             "total_reward":total_reward
         }
-        
+        reward_dict = {k: round(v, 4) if isinstance(v, float) else v 
+                 for k, v in reward_dict.items()}
         print(reward_dict)
 
         return total_reward
-
+    
     def _calculate_detection_reward(self, obs_dict: Dict, targets: List[Dict]) -> float:
-        """使用信号幅度计算目标检测奖励"""
+        """带详细调试输出的检测奖励函数"""
         processed_data = obs_dict['rd_map']
         total_reward = 0
         
-        # 获取雷达当前参数
+        # 获取雷达参数
         params = self.simulator.get_current_radar_params()
+        range_res = params.get('range_resolution', 0.5)
+        doppler_res = params.get('doppler_resolution', 0.2)
         
-        # 确保range_resolution有效避免除以零
-        range_res = params.get('range_resolution', 0.5)  # 默认0.5米
-        if range_res <= 0:
-            range_res = 0.5
+        # 噪声估计
+        noise_level = self._estimate_noise_floor(processed_data)
+        # noise_level = obs_dict.get('noise_floor', -100)
+        detection_threshold = noise_level + 2
         
-        # 同样的多普勒分辨率处理
-        doppler_res = params.get('doppler_resolution', 0.2)  # 默认0.2m/s
-        if doppler_res <= 0:
-            doppler_res = 0.2
-        for target in targets:
+        print("="*50)
+        print(f"噪声水平: {noise_level:.1f}dB, 检测阈值: {detection_threshold:.1f}dB")
+        print(f"距离分辨率: {range_res:.3f}m, 多普勒分辨率: {doppler_res:.3f}m/s")
+        
+        for i, target in enumerate(targets):
+            print(f"\n目标 #{i+1}:")
             x, y, z = target['location']
-            # 计算真实距离
-            true_range = np.sqrt(x**2 + y**2 + z**2)
-            # 计算距离单元 - 确保在有效范围内
-            range_bin = int(np.clip(true_range / range_res, 0, processed_data.shape[0]-1))
+            print(f"位置: ({x:.1f}, {y:.1f}, {z:.1f})m")
             
-            # 计算径向速度（目标速度在视线方向上的投影）
+            # 计算距离
+            true_range = np.sqrt(x**2 + y**2 + z**2)
+            print(f"真实距离: {true_range:.1f}m")
+            
+            # 计算距离单元
+            range_bin = int(np.clip(true_range / range_res, 0, processed_data.shape[0]-1))
+            print(f"距离单元: {range_bin}")
+            
+            # 计算径向速度
             radial_velocity = (
                 target['speed'][0] * (x/true_range) +
                 target['speed'][1] * (y/true_range) +
                 target['speed'][2] * (z/true_range) if true_range > 0 else 0
             )
+            print(f"径向速度: {radial_velocity:.1f}m/s")
             
-            # 计算多普勒单元 - 确保在有效范围内
+            # 计算多普勒单元
             doppler_bin = int(np.clip(
                 radial_velocity / doppler_res, 
                 0, 
                 processed_data.shape[1]-1
             ))
+            print(f"多普勒单元: {doppler_bin}")
             
-            # 获取信号幅度（关键：使用np.abs转换复数到实数）            
+            # 获取信号
             signal_magnitude = np.abs(processed_data[range_bin, doppler_bin])
-            signal_db = 10 * np.log10(signal_magnitude + 1e-9)  # 避免log(0)
-            normalized_signal = (signal_db + 100) / 100  # 将-100dB到0dB映射到0-1            
-            total_reward += normalized_signal * target.get('rcs', 1.0)   
-        return float(total_reward)  # 确保返回浮点数
+            signal_db = 10 * np.log10(signal_magnitude + 1e-9)
+            print(f"信号幅度(dB): {signal_db:.1f}")
+            
+            # 检查检测
+            if signal_db < detection_threshold:
+                print("⚠️ 未检测到: 信号低于阈值")
+                continue
+            
+            # 计算超过阈值的信号
+            excess_signal = signal_db - detection_threshold
+            print(f"超过阈值信号: {excess_signal:.1f}dB")
+            
+            # 距离衰减因子 (调整公式)
+            range_factor = 1.0 / (1.0 + (true_range/800)**2)  # 800米参考距离
+            print(f"距离衰减因子: {range_factor:.3f}")
+            
+            # RCS因子
+            rcs = target.get('rcs', 1.0)
+            print(f"RCS: {rcs:.1f}m²")
+            
+            # 目标奖励
+            target_reward = excess_signal * range_factor * rcs
+            print(f"目标奖励: {target_reward:.3f}")
+            total_reward += target_reward
+        
+        print(f"总检测奖励: {total_reward:.3f}")
+        print("="*50)
+        return float(total_reward)    
+    def _calculate_detection_reward2(self, obs_dict: Dict, targets: List[Dict]) -> float:
+        """基于雷达方程计算目标检测奖励"""
+        processed_data = obs_dict['rd_map']
+        total_reward = 0
+        
+        # 获取雷达系统参数
+        radar_params = self.simulator.get_current_radar_params()
+        
+        # 1. 计算噪声基准（关键修正）
+        noise_floor = self._estimate_noise_floor(processed_data)
+        
+        for target in targets:
+            # 2. 计算目标理论信号强度（雷达方程）
+            theoretical_signal = self._calculate_theoretical_signal(target, radar_params)
+            
+            # 3. 获取实际测量信号
+            measured_signal = self._get_measured_signal(target, processed_data, radar_params)
+            
+            # 4. 计算信噪比(SNR)
+            snr = measured_signal / (noise_floor + 1e-9)  # 避免除零
+            
+            # 5. 转换为dB
+            snr_db = 10 * np.log10(snr + 1e-9)
+            
+            # 6. 设置检测阈值（典型雷达系统阈值）
+            detection_threshold = 10  # dB (典型值)
+            
+            if snr_db < detection_threshold:
+                continue  # 未检测到目标
+            
+            # 7. 计算检测置信度
+            detection_confidence = min(1.0, (snr_db - detection_threshold) / 20)
+            
+            # 8. 计算目标奖励
+            target_reward = detection_confidence * target.get('rcs', 1.0)
+            total_reward += target_reward
+        
+        return float(total_reward)
+
+    def _estimate_noise_floor(self, rd_map):
+        """
+        鲁棒的距离-多普勒图噪声基准估计
+        
+        参数:
+            rd_map: 距离-多普勒图（复数矩阵）
+        
+        返回:
+            噪声水平(dB)
+        """
+        # 1. 将复数数据转换为幅度（或功率）
+        magnitude = np.abs(rd_map)
+        
+        # 2. 排除强目标区域（使用百分位数阈值）
+        # 假设噪声是幅度较小的部分
+        threshold = np.percentile(magnitude, 90)  # 90%分位数作为阈值
+        noise_mask = magnitude < threshold
+        
+        # 3. 计算噪声区域的统计量
+        noise_samples = magnitude[noise_mask]
+        
+        if len(noise_samples) == 0:
+            # 回退方案：使用整个矩阵的最小值
+            return 10 * np.log10(np.min(magnitude) + 1e-9)
+        
+        # 4. 计算噪声基准（中值更鲁棒）
+        noise_median = np.median(noise_samples)
+        
+        # 5. 转换为dB
+        noise_db = 10 * np.log10(noise_median + 1e-9)
+        
+        return noise_db
+
+    def _calculate_theoretical_signal(self, target, radar_params):
+        """基于雷达方程计算理论信号强度"""
+        # 雷达方程参数
+        Pt = radar_params.get('tx_power', 100)  # 发射功率(W)
+        G = radar_params.get('antenna_gain', 30)  # 天线增益(dB)
+        λ = radar_params.get('wavelength', 0.0039)  # 波长(m) 77GHz雷达
+        
+        # 目标参数
+        R = np.linalg.norm(target['location'])  # 距离(m)
+        RCS = target.get('rcs', 1.0)  # 雷达截面积(m²)
+        
+        # 雷达方程（简化版）
+        # Pr = (Pt * G² * λ² * RCS) / ((4π)³ * R⁴ * L)
+        # 其中L是系统损耗（假设为1）
+        
+        # 计算接收功率
+        Pr = (Pt * (10**(G/10))**2 * λ**2 * RCS) / \
+            ((4 * np.pi)**3 * R**4)
+        
+        return Pr
+
+    def _get_measured_signal(self, target, rd_map, radar_params):
+        """获取目标位置的实际信号强度"""
+        # 计算目标在RD图中的位置
+        range_res = radar_params.get('range_resolution', 0.5)
+        doppler_res = radar_params.get('doppler_resolution', 0.2)
+        
+        x, y, z = target['location']
+        true_range = np.sqrt(x**2 + y**2 + z**2)
+        range_bin = int(np.clip(true_range / range_res, 0, rd_map.shape[0]-1))
+        
+        # 计算径向速度
+        radial_velocity = (
+            target['speed'][0] * (x/true_range) +
+            target['speed'][1] * (y/true_range) +
+            target['speed'][2] * (z/true_range) if true_range > 0 else 0
+        )
+        
+        doppler_bin = int(np.clip(
+            radial_velocity / doppler_res, 
+            0, 
+            rd_map.shape[1]-1
+        ))
+        
+        # 获取信号幅度
+        return np.abs(rd_map[range_bin, doppler_bin])
 
     def _calculate_power_penalty(self, radar_params: Dict) -> float:
-        """Calculate penalty for power usage"""
-        # Penalize high gain and high transmit power
-        gain_penalty = -radar_params.get('gain', 0)
-        # Estimate transmit power (simplified)
-        tx_power = radar_params.get('gain', 0) * 0.1  # Simplified model
-        power_penalty = -tx_power * 0.01
-        return gain_penalty + power_penalty
+        """功率惩罚应为正值（越高表示功率浪费越多）"""
+        # 功率指标（应为正值）
+        gain = radar_params.get('gain', 0)
+        tx_power = gain * 0.1  # 功率估算
+        
+        # 返回正值（表示需要惩罚的程度）
+        return tx_power  # 这将乘以负权重变为负值
 
     def _calculate_interference_penalty(self, obs_dict: Dict) -> float:
         """计算干扰惩罚（分贝尺度+裁剪）"""
@@ -571,17 +729,17 @@ class CognitiveRadarEnv(gym.Env):
         db_data = 10 * np.log10(magnitude_data + 1e-9)
         
         # 裁剪到合理范围（-100dB到0dB）
-        clipped_db = np.clip(db_data, -100, 0)
+        clipped_db = np.clip(db_data, -100, 100)
         
         # 计算平均分贝值
         avg_db = np.mean(clipped_db)
         
         # 惩罚高干扰水平
         # 分贝值越高（越接近0），干扰越大，惩罚越大
-        penalty = -avg_db * 0.01  # 缩放因子
+        penalty = avg_db * 0.01  # 缩放因子
         
         # 确保惩罚值在合理范围
-        return float(np.clip(penalty, -10, 0))
+        return float(np.clip(penalty, 0, 10))
 
     def _calculate_waveform_reward(self, radar_params: Dict) -> float:
         """Calculate reward for optimal waveform parameters"""
@@ -599,20 +757,88 @@ class CognitiveRadarEnv(gym.Env):
         # Penalty for high PRF (increased processing load)
         prf = radar_params.get('prf', self.prf_range[0])
         max_prf = self.prf_range[1]
-        reward -= 0.1 * (prf / max_prf)
+        reward -=  prf / max_prf
 
         # Penalty for long pulse width (reduced time resolution)
         pulse_width = radar_params.get(
             'pulse_width', self.pulse_width_range[0])
         max_pw = self.pulse_width_range[1]
-        reward -= 0.1 * (pulse_width / max_pw)
+        reward -= pulse_width / max_pw
         return float(reward)
+    
+    def _calculate_beam_reward(self, targets, radar_params):
+        beam_az = radar_params['beam_az']
+        beam_el = radar_params['beam_el']
+        beam_width = 20.0  # 加宽波束至20°
+        
+        total_reward = 0
+        for target in targets:
+            x, y, z = target['location']
+            
+            # 计算目标角度（使用安全除法）
+            r_xy = max(0.1, math.sqrt(x**2 + y**2))  # 避免除0
+            target_az = math.degrees(math.atan2(y, x))
+            target_el = math.degrees(math.atan2(z, r_xy))
+            
+            # 计算角度差异（考虑方位角周期性）
+            az_diff = min(abs(target_az - beam_az), 360 - abs(target_az - beam_az))
+            el_diff = abs(target_el - beam_el)
+            
+            # 使用高斯权重计算波束内贡献
+            az_score = math.exp(-(az_diff**2)/(2*(beam_width/3)**2))  # 3σ=波束宽
+            el_score = math.exp(-(el_diff**2)/(2*(beam_width/3)**2))
+            in_beam_factor = az_score * el_score
+            
+            total_reward += in_beam_factor * target.get('rcs', 1.0)
+        
+        return total_reward    
 
-    def _calculate_beam_reward(self, targets: List[Dict], radar_params: Dict) -> float:
-        """Calculate reward for beam alignment with targets"""
-        # Reward for each target in the beam
-        targets_in_beam = self._get_targets_in_beam(targets, radar_params)
-        return len(targets_in_beam) * 2.0
+    def _calculate_beam_reward2(self, targets: List[Dict], radar_params: Dict) -> float:
+        """计算波束对准奖励（带详细调试）"""
+        beam_az = radar_params.get('beam_az', 0)
+        beam_el = radar_params.get('beam_el', 0)
+        beam_width = 30.0  # 波束宽度（度）
+        
+        total_reward = 0
+        
+        print(f"波束方向: 方位角={beam_az:.1f}°, 俯仰角={beam_el:.1f}°, 波束宽度={beam_width}°")
+        
+        for i, target in enumerate(targets):
+            # 计算目标位置
+            x, y, z = target['location']
+            
+            # 计算目标距离
+            distance = np.sqrt(x**2 + y**2 + z**2)
+            
+            # 计算目标方位角（从雷达视角）
+            target_az = np.degrees(np.arctan2(y, x))
+            
+            # 计算目标俯仰角（从雷达视角）
+            target_el = np.degrees(np.arctan2(z, np.sqrt(x**2 + y**2)))
+            
+            # 计算角度差
+            az_diff = abs(target_az - beam_az)
+            el_diff = abs(target_el - beam_el)
+            
+            # 计算波束内比例
+            in_beam_az = max(0, 1 - az_diff / (beam_width/2))
+            in_beam_el = max(0, 1 - el_diff / (beam_width/2))
+            in_beam_factor = in_beam_az * in_beam_el
+            
+            # 根据目标RCS加权
+            rcs = target.get('rcs', 1.0)
+            target_reward = in_beam_factor * rcs
+            total_reward += target_reward
+            
+            # 详细调试输出
+            print(f"目标 {i}: 位置=({x:.1f}, {y:.1f}, {z:.1f})m, "
+                f"距离={distance:.1f}m, "
+                f"方位角={target_az:.1f}°, 俯仰角={target_el:.1f}°, "
+                f"方位差={az_diff:.1f}°, 俯仰差={el_diff:.1f}°, "
+                f"波束内比例={in_beam_factor:.2f}, RCS={rcs:.1f}, 奖励={target_reward:.2f}")
+        
+        print(f"总波束对准奖励: {total_reward:.2f}")
+        return total_reward
 
     def _get_targets_in_beam(self, targets: List[Dict], radar_params: Dict) -> list:
         """Get targets currently within the radar beam"""
@@ -711,26 +937,26 @@ def main():
                 "gain_control": 1
             }
         },
-        # "targets": [
-        #     {
-        #         "model_type": "high_speed_drone",
-        #         "params": {
-        #             "start_position": [50, 50, 10],
-        #             "end_position": [200, 200, 20],
-        #             "cruise_speed": 30,
-        #             "rcs": 1.0
-        #         }
-        #     },
-        #     {
-        #         "model_type": "swarm",
-        #         "params": {
-        #             "num_targets": 5,
-        #             "x_center": -30,
-        #             "y_center": -40,
-        #             "area_size": 20
-        #         }
-        #     }
-        # ]
+        "targets": [
+            {
+                "model_type": MotionModelType.HIGH_SPEED_DRONE,
+                "params": {
+                    "start_position": [2000, 50, 50],
+                    "end_position": [10000, 200, 100],
+                    "cruise_speed": 30,
+                    "rcs": 1.0
+                }
+            },
+            {
+                "model_type": MotionModelType.SWARM,
+                "params": {
+                    "num_targets": 1,
+                    "x_center": -1000,
+                    "y_center": -2000,
+                    "area_size": 20
+                }
+            }
+        ]
     }
 
     # 创建环境
@@ -742,7 +968,7 @@ def main():
     print("初始信息:", info.keys())
 
     # 随机策略测试
-    for _ in range(10):
+    for _ in range(100):
         action = env.action_space.sample()
         obs, reward, terminated, truncated, info = env.step(action)
         print(f"奖励: {reward:.4f}, 终止: {terminated}, 截断: {truncated}")

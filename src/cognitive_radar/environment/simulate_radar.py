@@ -7,6 +7,20 @@ import radarsimpy.processing as proc
 from scipy.constants import speed_of_light
 from scipy import signal
 
+def normalize_rd_map(rd_map):
+    """归一化距离-多普勒图"""
+    # 方法1：按最大值归一化
+    max_val = np.max(np.abs(rd_map))
+    if max_val > 0:
+        return rd_map / max_val
+    
+    # 方法2：按中值归一化
+    median_val = np.median(np.abs(rd_map))
+    if median_val > 0:
+        return rd_map / median_val
+    
+    return rd_map
+
 class RadarSimulator:
     """Wrapper for radar simulation using RadarSimPy"""
     
@@ -63,7 +77,8 @@ class RadarSimulator:
             dwin=dop_window,
             rn=samples_per_pulse,
             dn=pulses)  
-        return rd_map.squeeze(0)
+        
+        return normalize_rd_map(rd_map.squeeze(0))
     
     def get_observation(self, baseband: np.ndarray) -> Dict:
         """Generate observation from raw radar data"""
