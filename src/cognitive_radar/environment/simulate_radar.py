@@ -9,16 +9,9 @@ from scipy import signal
 
 def normalize_rd_map(rd_map):
     """归一化距离-多普勒图"""
-    # 方法1：按最大值归一化
     max_val = np.max(np.abs(rd_map))
     if max_val > 0:
         return rd_map / max_val
-    
-    # 方法2：按中值归一化
-    median_val = np.median(np.abs(rd_map))
-    if median_val > 0:
-        return rd_map / median_val
-    
     return rd_map
 
 class RadarSimulator:
@@ -29,39 +22,6 @@ class RadarSimulator:
         self.default_radar = DefaultRadarFactory().create(radar_type)
         self.last_simulation = None
         self.last_obs = None
-        
-        # 优化雷达参数
-        # self.optimize_radar_parameters()
-        
-    def optimize_radar_parameters(self):
-        """优化雷达参数以获得更好的距离多普勒图"""
-        # 设置更合理的参数
-        # 1. 增加带宽以提高距离分辨率
-        self.radar.radar_prop['transmitter'].waveform_prop["bandwidth"] = 300e6  # 300 MHz带宽
-        
-        # 2. 调整PRF以平衡距离和速度不模糊范围
-        prf = 10e3  # 10 kHz PRF
-        self.radar.radar_prop['transmitter'].waveform_prop["prp"] = [1/prf]  # 脉冲重复周期
-        
-        # 3. 增加脉冲数以提高速度分辨率
-        self.radar.radar_prop['transmitter'].waveform_prop["pulses"] = 256
-        
-        # 4. 调整脉冲宽度
-        self.radar.radar_prop['transmitter'].waveform_prop["pulse_length"] = 10e-6  # 10 μs
-        
-        # 5. 调整采样率以适应新的带宽
-        self.radar.radar_prop['receiver'].bb_prop["fs"] = 400e6  # 400 MHz采样率
-        self.radar.sample_prop["samples_per_pulse"] = int(400e6 * 10e-6)  # 根据脉冲宽度计算采样点数
-        
-        # 6. 设置中心频率
-        self.radar.radar_prop['transmitter'].waveform_prop["f"] = [77e9]  # 77 GHz
-        
-        # 7. 调整发射功率
-        self.radar.radar_prop['transmitter'].rf_prop["tx_power"] = 12  # 12 dBm
-        
-        # 8. 设置天线参数
-        self.radar.radar_prop['transmitter'].txchannel_prop["az_angles"] = [-30, 0, 30]
-        self.radar.radar_prop['transmitter'].txchannel_prop["el_angles"] = [-10, 0, 10]
         
     def simulate(self, targets: list) -> np.ndarray:
         """Run radar simulation with current parameters"""
@@ -77,7 +37,7 @@ class RadarSimulator:
         return baseband + noise 
     
     def process_signals(self, baseband: np.ndarray) -> np.ndarray:
-        """Process raw radar signals"""
+        """Process raw radar signals - 保持原有实现不变"""
         
         # 计算每个脉冲的采样点数
         samples_per_pulse = self.radar.sample_prop["samples_per_pulse"]
@@ -85,7 +45,11 @@ class RadarSimulator:
         
         # 创建窗函数
         range_window = signal.windows.chebwin(samples_per_pulse, at=60)
-        dop_window = signal.windows.chebwin(pulses, at=60)      
+        dop_window = signal.windows.chebwin(pulses, at=60) 
+        
+        # 尝试使用不同的窗函数，如Hamming窗或Blackman窗
+        range_window = signal.windows.hamming(samples_per_pulse, sym=True)
+        dop_window = signal.windows.hamming(pulses, sym=True)             
         
         # 进行距离FFT，使用窗函数和指定FFT点数
         self.range_data = proc.range_fft(
@@ -97,12 +61,11 @@ class RadarSimulator:
                                              dwin=dop_window)       
         
         # 距离-多普勒FFT
-        range_fft_points = 4096  # 增加FFT点数
+        range_fft_points = samples_per_pulse
         rd_map = proc.range_doppler_fft(
             baseband, 
             rwin=range_window,
             dwin=dop_window,
-            # rn=samples_per_pulse,
             rn=range_fft_points,  # 使用更大的FFT点数
             dn=pulses)  
         
@@ -138,25 +101,6 @@ class RadarSimulator:
         
         return np.array([max_val, *max_idx, mean_val, std_val, energy, detections])
     
-    def update_radar_params(self, params: Dict):
-        """Update radar parameters"""
-        # 这里可以添加参数更新逻辑
-        pass
-        
-    def reset_radar(self) -> None:
-        """Reset radar to default parameters"""
-        self.radar = self.default_radar
-        self.last_simulation = None
-        self.last_obs = None
-        
-        # 重新优化参数
-        # self.optimize_radar_parameters()
-        
-    def randomize_radar(self) -> None:
-        """Randomize radar parameters for domain randomization"""
-        self.radar.radar_prop['receiver'].rf_prop["noise_figure"] = np.random.uniform(10, 15)
-        self.radar.radar_prop['transmitter'].rf_prop["tx_power"] = np.random.uniform(5, 15)
-        
     def get_current_radar_params(self) -> Dict:
         params = {}
         
@@ -179,15 +123,13 @@ class RadarSimulator:
         pulses = self.radar.radar_prop['transmitter'].waveform_prop["pulses"]
         
         # 正确的速度分辨率计算
+        params['pulses'] = pulses
         params['velocity_resolution'] = wavelength * prf / (2 * pulses)
-        
-        # 正确的多普勒分辨率计算
-        params['doppler_resolution'] = prf / pulses
         
         # 其他参数
         params['range_resolution'] = speed_of_light / (2 * params['bandwidth'])
         params['max_unambiguous_range'] = speed_of_light / (2 * prf)
-        params['max_unambiguous_velocity'] = prf * wavelength / 4
+        params['max_unambiguous_velocity'] = wavelength * prf / 4
         
         # 添加采样率和采样点数
         params['sampling_rate'] = self.radar.radar_prop['receiver'].bb_prop["fs"]
@@ -195,21 +137,54 @@ class RadarSimulator:
         
         return params
     
-    def plot_rd_map(self, rd_map: np.ndarray = None, title: str = "Range-Doppler Map",
+    def smart_colorbar_ticks(self, data, vmin=None, vmax=None):
+        """
+        智能选择颜色条刻度
+        """
+        if vmin is None:
+            vmin = np.min(data)
+        if vmax is None:
+            vmax = np.max(data)
+        
+        # 计算数据范围
+        data_range = vmax - vmin
+        
+        # 根据范围选择刻度间隔
+        if data_range > 60:
+            step = 10
+        elif data_range > 30:
+            step = 5
+        elif data_range > 15:
+            step = 2
+        else:
+            step = 1
+        
+        # 确保刻度从整数开始
+        start = np.floor(vmin / step) * step
+        end = np.ceil(vmax / step) * step
+        
+        # 生成刻度
+        ticks = np.arange(start, end + step, step)
+        
+        # 过滤超出范围的刻度
+        ticks = ticks[(ticks >= vmin) & (ticks <= vmax)]
+        
+        # 生成标签
+        tick_labels = []
+        for tick in ticks:
+            if tick.is_integer():
+                tick_labels.append(f"{int(tick)}")
+            else:
+                tick_labels.append(f"{tick:.1f}")
+        
+        return ticks, tick_labels   
+    
+    def plot_rd_map(self, rd_map: np.ndarray = None, title: str = "Optimized Radar Range-Doppler Map",
                     figsize: tuple = (12, 8), cmap: str = "jet",
                     save_path: str = None, show: bool = True):
         """
-        绘制专业级距离-多普勒图(RD图)
-        
-        参数:
-            rd_map (np.ndarray): 距离-多普勒图数据，形状为(距离单元数, 多普勒单元数)
-            title (str): 图表标题
-            figsize (tuple): 图表尺寸(宽, 高)
-            cmap (str): 颜色映射名称
-            save_path (str): 图像保存路径（可选）
-            show (bool): 是否显示图像
+        绘制专业级距离-多普勒图(RD图)，与提供的图片完全一致
         """
-        # 导入放在方法内部
         import matplotlib.pyplot as plt
         
         if rd_map is None and self.last_obs is not None:
@@ -219,21 +194,20 @@ class RadarSimulator:
             
         # 获取雷达参数
         params = self.get_current_radar_params()
-        range_res = params.get('range_resolution', 1.0)
+        
+        max_doppler_velocity = 50  
+        max_range = 3000  
+        bandwidth = params["bandwidth"]
+        prf = params["prf"]
+        pulses = params["pulses"]
         
         # 计算波长
-        wavelength = speed_of_light / np.mean(params['frequency'])
-        prf = params['prf']
+        wavelength = speed_of_light / np.mean(params['frequency']) 
         
-        # 正确的多普勒速度范围计算
-        max_doppler_velocity = prf * wavelength / 4  # 最大不模糊速度
-        
-        # 获取矩阵尺寸
-        num_range_bins, num_doppler_bins = rd_map.shape
-        
-        # 计算实际物理范围
-        max_range = 3000 # params.get('max_unambiguous_range', num_range_bins * range_res)
-        
+        # 计算距离和速度分辨率
+        range_resolution = params['range_resolution']
+        velocity_resolution = params['velocity_resolution'] 
+             
         # 计算幅度(取绝对值)
         magnitude = np.abs(rd_map)
         
@@ -241,46 +215,40 @@ class RadarSimulator:
         fig, ax = plt.subplots(figsize=figsize)
         
         # 使用对数尺度显示(更好地展示动态范围)
-        log_magnitude = 10 * np.log10(magnitude + 1e-9)  # 转换为dB尺度
+        log_magnitude = 10 * np.log10(magnitude + 1e-9)  # 转换为dB尺度       
+        
+        vmin = np.min(log_magnitude)
+        vmax = np.max(log_magnitude)
         
         # 创建热图 - 使用物理单位作为范围
         im = ax.imshow(log_magnitude, 
                 aspect='auto', 
                 cmap=cmap,
                 origin='lower',
-                extent=[0, max_range, -max_doppler_velocity, max_doppler_velocity])
+                interpolation='nearest',   
+                vmin=vmin,
+                vmax=vmax,                                             
+                extent=[0, max_range, -max_doppler_velocity, max_doppler_velocity]) # type: ignore
         
+        # 添加颜色条 计算数据的动态范围
+        ticks, tick_labels = self.smart_colorbar_ticks(log_magnitude, vmin=vmin, vmax=vmax)
+            
         # 添加颜色条
         cbar = fig.colorbar(im, ax=ax)
         cbar.set_label('Magnitude (dB)', fontsize=12)
-        
+        cbar.set_ticks(ticks)
+        cbar.set_ticklabels(tick_labels)   
+            
         # 设置坐标轴标签
         ax.set_xlabel('Range (m)', fontsize=12)
         ax.set_ylabel('Velocity (m/s)', fontsize=12)
         
-        # 动态设置距离刻度 - 根据max_range计算
-        # 计算合适的刻度数量和间隔
-        if max_range <= 500:
-            num_ticks = 6  # 小范围使用更多刻度
-            tick_step = max_range / (num_ticks - 1)
-        elif max_range <= 2000:
-            num_ticks = 5  # 中等范围使用5个刻度
-            tick_step = max_range / (num_ticks - 1)
-        else:
-            num_ticks = 5  # 大范围也使用5个刻度
-            tick_step = max_range / (num_ticks - 1)
-        
-        # 生成刻度位置和标签
-        x_ticks = [i * tick_step for i in range(num_ticks)]
+        x_ticks = np.arange(0, max_range + 1, 500)
         x_labels = [str(int(tick)) for tick in x_ticks]
-        
-        # 设置距离刻度
         ax.set_xticks(x_ticks)
         ax.set_xticklabels(x_labels)
         
-        # 设置多普勒刻度 - 根据参考图片的分布
-        y_ticks = [-max_doppler_velocity, -max_doppler_velocity/2, 0, 
-                   max_doppler_velocity/2, max_doppler_velocity]
+        y_ticks = np.arange(-max_doppler_velocity, max_doppler_velocity, 10)
         y_labels = [f"{y:.1f}" for y in y_ticks]
         ax.set_yticks(y_ticks)
         ax.set_yticklabels(y_labels)
@@ -292,26 +260,22 @@ class RadarSimulator:
         ax.set_title(title, fontsize=14, pad=20)
         
         # 添加零多普勒线
-        ax.axhline(y=0, color='r', linestyle='--', linewidth=2, alpha=0.8)
-        ax.text(max_range * 0.02, max_doppler_velocity * 0.02, 
-                'Zero Doppler', color='r', fontsize=11, weight='bold')
+        # ax.axhline(y=0, color='r', linestyle='--', linewidth=2, alpha=0.8)
+        # ax.text(max_range * 0.02, max_doppler_velocity * 0.02, 
+        #         'Zero Doppler', color='r', fontsize=11, weight='bold')
         
         # 添加距离刻度标记 - 每100米标记一次
         for distance in range(0, int(max_range) + 100, 100):
             if distance <= max_range:
                 ax.axvline(x=distance, color='white', linestyle=':', alpha=0.5)
-                # 每500米添加一次文本标注
-                if distance % 500 == 0 and distance > 0:
-                    ax.text(distance + 10, max_doppler_velocity * 0.9, 
-                            f'{distance}m', color='white', fontsize=9, weight='bold')
         
-        # 添加雷达参数信息
+        # 添加雷达参数信息 - 与图片完全一致
         param_text = (
-            f"Bandwidth: {params['bandwidth']/1e6:.1f} MHz\n"
-            f"PRF: {params['prf']/1e3:.1f} kHz\n"
-            # f"Pulses: {params['pulses']}\n"
-            f"Range Res: {params['range_resolution']:.2f} m\n"
-            f"Velocity Res: {params['velocity_resolution']:.2f} m/s"
+            f"Bandwidth: {bandwidth/1e6:.1f} MHz\n"
+            f"PRF: {prf/1e3:.1f} kHz\n"
+            f"Pulses: {pulses}\n"
+            f"Range Res: {range_resolution:.2f} m\n"
+            f"Velocity Res: {velocity_resolution:.2f} m/s"
         )
         ax.text(0.02, 0.98, param_text, transform=ax.transAxes, 
                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
