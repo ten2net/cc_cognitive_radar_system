@@ -70,51 +70,41 @@ class DefaultRadarFactory(RadarFactory):
         # 使用传入的位置和速度或默认值
         loc = location if location is not None else tuple(config.location)
         spd = speed if speed is not None else tuple(config.speed)
-        # tx_dict ={
-            
-        # }
+
+        # 示例：30 dB增益的方向图
+        antenna_gain = 30  # dBi
+        az_angle = np.arange(-20, 21, 1)
+        az_pattern = 20 * np.log10(np.cos(az_angle / 180 * np.pi) ** 500) + antenna_gain
+        el_angle = np.arange(-20, 21, 1)
+        el_pattern = 20 * np.log10((np.cos(el_angle / 180 * np.pi)) ** 400) + antenna_gain  
+        tx_channel = dict(
+            location=loc,
+            azimuth_angle=az_angle,
+            azimuth_pattern=az_pattern,
+            elevation_angle=el_angle,
+            elevation_pattern=el_pattern,
+            speed=spd
+        ) 
         
-        # antenna_gain = 12
-
-        # az_angle = np.arange(-80, 81, 1)
-        # az_pattern = 20 * np.log10(np.cos(az_angle / 180 * np.pi) ** 4) + antenna_gain
-
-        # el_angle = np.arange(-80, 81, 1)
-        # el_pattern = 20 * np.log10((np.cos(el_angle / 180 * np.pi)) ** 20) + antenna_gain   
-        # tx_channel = dict(
-        #     location=(0, 0, 0),
-        #     azimuth_angle=az_angle,
-        #     azimuth_pattern=az_pattern,
-        #     elevation_angle=el_angle,
-        #     elevation_pattern=el_pattern,
-        # )             
+                  
         # 创建发射机
-        tx = Transmitter(
-            # f=[76.3e9, 76.7e9],
-            # t=5.12e-05,
-            # tx_power=13,
-            # prp=5.5e-05,
-            # pulses=512,            
+        tx = Transmitter(           
             f=config.frequency,
             t=config.pulse_width,     # 脉冲宽度列表
             tx_power=config.tx_power,   # 峰值功率(W)
             pulses=config.pulses,
             prp=config.prp,
-            # channels=[tx_channel],
-            channels=[
-                dict(
-                    location=loc,
-                    # polarization= [1, 0],   # 这里使用水平极化
-                        # 添加天线增益和方向图
-                    # antenna_gain= 30,   # 30 dBi                    
-                    az_angles=np.arange(-45, 46, 1),
-                    el_angles=np.arange(-20, 21, 1),
-                    az_pattern=np.ones(91),
-                    el_pattern=np.ones(41),
-                    speed=spd
-                )
-            ]
+            channels=[tx_channel],
         )
+        
+        rx_channel = dict(
+            location=loc,
+            azimuth_angle=az_angle,
+            azimuth_pattern=az_pattern,
+            elevation_angle=el_angle,
+            elevation_pattern=el_pattern,
+            speed=spd
+        )         
         
         # 创建接收机
         rx = Receiver(
@@ -122,16 +112,7 @@ class DefaultRadarFactory(RadarFactory):
             noise_figure=6,
             rf_gain=config.rf_gain,
             baseband_gain=config.baseband_gain,
-            channels=[
-                dict(
-                    location=loc,
-                    az_angles=np.arange(-45, 46, 1),
-                    el_angles=np.arange(-20, 21, 1),
-                    az_pattern=np.ones(91),
-                    el_pattern=np.ones(41),
-                    speed=spd
-                )
-            ]
+            channels=[rx_channel]
         )
         
         # 创建雷达实例
@@ -158,10 +139,10 @@ def main():
             print(f"  {key}: {value}")
     
     # 创建特定雷达实例
-    radar_type = "PD-LS05"  # 反无人机专用雷达
+    radar_type = "PD-LS02"  # 反无人机专用雷达
     radar = factory.create(
         radar_type,
-        location=(100, 50, 10),  # 自定义位置
+        location=(0, 0, 0),  # 自定义位置
         speed=(0, 0, 0)          # 静止
     )
     
@@ -173,7 +154,7 @@ def main():
     receiver = radar.radar_prop["receiver"]
     
     # 2. 中心频率 - 通过发射机的频率参数
-    print(f"中心频率: {transmitter.waveform_prop} ")
+    # print(f"中心频率: {transmitter.waveform_prop} ")
     print(f"中心频率: {np.mean(transmitter.waveform_prop['f'])/1e9:.2f} GHz")
     
     # 3. 带宽 - 通过发射机的带宽属性
