@@ -6,6 +6,7 @@ from radarsimpy.simulator import sim_radar
 import radarsimpy.processing as proc
 from scipy.constants import speed_of_light
 from scipy import signal
+import matplotlib.pyplot as plt
 
 def normalize_rd_map(rd_map):
     """归一化距离-多普勒图"""
@@ -136,6 +137,85 @@ class RadarSimulator:
         
         return params
     
+    
+    def find_peaks(self, rd_map, size=9, threshold=10, num_peaks=10):
+        """
+        检测二维数据的峰值
+        :param rd_map: 二维雷达数据（距离-多普勒图）
+        :param size: 邻域窗口大小（奇数）
+        :param threshold: 峰值强度阈值
+        :param num_peaks: 可检测的峰值数量
+        :return: 峰值信息列表，包含位置、距离、速度、强度等信息
+        """
+        from skimage.feature import peak_local_max
+        
+        # 计算幅度(dB尺度)
+        magnitude = np.abs(rd_map)
+        db_magnitude = 10 * np.log10(magnitude + 1e-9)  # 转换为dB尺度
+        
+        # 计算噪声基底和自适应阈值
+        noise_floor = np.percentile(db_magnitude, 25)
+
+        print(noise_floor,np.max(db_magnitude), np.min(db_magnitude), np.mean(db_magnitude))
+        threshold_abs = noise_floor + threshold if threshold else np.percentile(db_magnitude, 75)
+        
+        # 峰值检测
+        # 使用自定义邻域形状
+        footprint = np.ones((3, 3), dtype=bool)  # 3x3正方形邻域        
+        peaks = peak_local_max(db_magnitude, 
+                            min_distance=size, 
+                            threshold_abs=threshold_abs, # 绝对强度阈值
+                            threshold_rel=0.33, # 相对于最大强度设置阈值
+                            # footprint=footprint, # 自定义邻域形状
+                            num_peaks=num_peaks)  # 增加可检测的峰值数量
+        
+        # 转换为物理坐标
+        params = self.get_current_radar_params()
+        range_resolution = params['range_resolution']
+        velocity_resolution = params['velocity_resolution']
+        
+        num_pulses, num_range_bins = rd_map.shape
+        ranges = np.arange(0, num_range_bins) * range_resolution
+        velocities = np.linspace(-velocity_resolution * num_pulses / 2, 
+                                velocity_resolution * num_pulses / 2, 
+                                num_pulses)
+        
+        # 峰值验证和后处理
+        peak_info = []
+        for peak in peaks:
+            row, col = peak[0], peak[1]
+            intensity = db_magnitude[row, col]
+            
+            # 计算局部对比度
+            # 定义区域半径 ,通常，5×5 区域是一个良好的起点，它在计算效率和统计稳定性之间提供了良好的平衡。
+            row_radius = 2  # 行方向半径
+            col_radius = 2  # 列方向半径
+
+            local_region = db_magnitude[
+                max(0, row-row_radius):min(row+row_radius+1, db_magnitude.shape[0]),
+                max(0, col-col_radius):min(col+col_radius+1, db_magnitude.shape[1])
+            ]
+            local_mean = np.mean(local_region)
+            local_contrast = intensity - local_mean
+            
+            # 只保留对比度足够的峰值
+            if local_contrast > threshold * 0.5:
+                range_val = ranges[col]
+                velocity_val = velocities[row]
+                peak_info.append({
+                    'position': (int(row), int(col)),
+                    'range': range_val,  # 保持浮点精度
+                    'velocity': velocity_val,  # 保持浮点精度
+                    'intensity': intensity,
+                    'snr': intensity - noise_floor,
+                    'local_contrast': local_contrast
+                })
+        
+        # 按强度排序
+        peak_info.sort(key=lambda x: x['intensity'], reverse=True)
+        
+        return peak_info
+
     def smart_colorbar_ticks(self, data, vmin=None, vmax=None):
         """
         智能选择颜色条刻度
@@ -176,11 +256,12 @@ class RadarSimulator:
             else:
                 tick_labels.append(f"{tick:.1f}")
         
-        return ticks, tick_labels   
+        return ticks, tick_labels  
+     
     
-    def plot_rd_map(self, rd_map: np.ndarray = None, title: str = "Optimized Radar Range-Doppler Map",
+    def plot_rd_map(self, rd_map: np.ndarray = None, title: str = "Optimized Radar Range-Doppler Map", # type: ignore
                     figsize: tuple = (12, 8), cmap: str = "jet",
-                    save_path: str = None, show: bool = True):
+                    save_path: str = None, show: bool = True): # type: ignore
         """
         绘制专业级距离-多普勒图(RD图)，修复速度轴映射
         """
@@ -292,6 +373,272 @@ class RadarSimulator:
         
         return fig
 
+    def plot_3d_rd_map(self, rd_map: np.ndarray = None, title: str = "3D Range-Doppler Map", # type: ignore
+                    figsize: tuple = (14, 10), cmap: str = "jet",
+                    elevation: float = 30, azimuth: float = 45,
+                    save_path: str = None, show: bool = True): # type: ignore
+        """
+        绘制三维距离-多普勒图，提供更直观的信号强度可视化
+        
+        参数:
+        - rd_map: 距离多普勒图数据，如果为None则使用last_obs中的数据
+        - title: 图表标题
+        - figsize: 图表尺寸
+        - cmap: 颜色映射
+        - elevation: 3D视图的仰角
+        - azimuth: 3D视图的方位角
+        - save_path: 保存路径，如果为None则不保存
+        - show: 是否显示图表
+        """
+        if rd_map is None and self.last_obs is not None:
+            rd_map = self.last_obs['rd_map']
+        elif rd_map is None:
+            raise ValueError("No RD map available to plot")
+        
+        # 获取雷达参数
+        params = self.get_current_radar_params()
+        
+        # 计算距离和多普勒轴
+        range_resolution = params['range_resolution']
+        velocity_resolution = params['velocity_resolution']
+        max_unambiguous_range = 3000 #params['max_unambiguous_range']
+        max_unambiguous_velocity = params['max_unambiguous_velocity']
+        
+        # 创建距离轴和多普勒轴
+        range_bins = rd_map.shape[0]
+        doppler_bins = rd_map.shape[1]
+        
+        range_axis = np.linspace(0, max_unambiguous_range, range_bins)
+        doppler_axis = np.linspace(-max_unambiguous_velocity, max_unambiguous_velocity, doppler_bins)
+        
+        # 创建网格
+        R, V = np.meshgrid(range_axis, doppler_axis, indexing='ij')
+        
+        # 计算幅度(dB尺度)
+        magnitude = np.abs(rd_map)
+        db_magnitude = 10 * np.log10(magnitude + 1e-9)  # 避免log(0)
+        
+        # 创建3D图形
+        fig = plt.figure(figsize=figsize)
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # 绘制表面图
+        surf = ax.plot_surface(R, V, db_magnitude, cmap=cmap, 
+                            linewidth=0, antialiased=True, alpha=0.8)
+        
+        # 添加颜色条
+        cbar = fig.colorbar(surf, ax=ax, shrink=0.5, aspect=20)
+        cbar.set_label('Magnitude (dB)', fontsize=12)
+        
+        # 设置坐标轴标签
+        ax.set_xlabel('Range (m)', fontsize=12, labelpad=10)
+        ax.set_ylabel('Velocity (m/s)', fontsize=12, labelpad=10)
+        ax.set_zlabel('Magnitude (dB)', fontsize=12, labelpad=10)
+        
+        # 设置视角
+        ax.view_init(elev=elevation, azim=azimuth)
+        
+        # 添加标题
+        ax.set_title(title, fontsize=14, pad=20)
+        
+        # 添加网格
+        ax.grid(True, linestyle='--', alpha=0.3)
+        
+        # 添加雷达参数信息
+        param_text = (
+            f"Bandwidth: {params['bandwidth']/1e6:.1f} MHz\n"
+            f"PRF: {params['prf']/1e3:.1f} kHz\n"
+            f"Pulses: {params['pulses']}\n"
+            f"Range Res: {range_resolution:.2f} m\n"
+            f"Velocity Res: {velocity_resolution:.2f} m/s"
+        )
+        ax.text2D(0.02, 0.98, param_text, transform=ax.transAxes, 
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        
+        # 优化布局
+        plt.tight_layout()
+        
+        # 保存图像
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"3D RD map saved to {save_path}")
+        
+        # 显示图像
+        if show:
+            plt.show()
+        
+        return fig
+
+    def plot_3d_rd_map_contour(self, rd_map: np.ndarray = None, title: str = "3D Range-Doppler Contour Map", # type: ignore
+                            figsize: tuple = (14, 10), cmap: str = "jet",
+                            elevation: float = 30, azimuth: float = 45,
+                            save_path: str = None, show: bool = True): # type: ignore
+        """
+        绘制三维距离-多普勒等高线图，提供另一种视角
+        
+        参数与plot_3d_rd_map相同
+        """
+        if rd_map is None and self.last_obs is not None:
+            rd_map = self.last_obs['rd_map']
+        elif rd_map is None:
+            raise ValueError("No RD map available to plot")
+        
+        # 获取雷达参数
+        params = self.get_current_radar_params()
+        
+        # 计算距离和多普勒轴
+        range_resolution = params['range_resolution']
+        velocity_resolution = params['velocity_resolution']
+        max_unambiguous_range = 3000 # params['max_unambiguous_range']
+        max_unambiguous_velocity = params['max_unambiguous_velocity']
+        
+        # 创建距离轴和多普勒轴
+        range_bins = rd_map.shape[0]
+        doppler_bins = rd_map.shape[1]
+        
+        range_axis = np.linspace(0, max_unambiguous_range, range_bins)
+        doppler_axis = np.linspace(-max_unambiguous_velocity, max_unambiguous_velocity, doppler_bins)
+        
+        # 创建网格
+        R, V = np.meshgrid(range_axis, doppler_axis, indexing='ij')
+        
+        # 计算幅度(dB尺度)
+        magnitude = np.abs(rd_map)
+        db_magnitude = 10 * np.log10(magnitude + 1e-9)  # 避免log(0)
+        
+        # 创建3D图形
+        fig = plt.figure(figsize=figsize)
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # 绘制等高线图
+        contour = ax.contour3D(R, V, db_magnitude, 50, cmap=cmap, alpha=0.8)
+        
+        # 添加颜色条
+        cbar = fig.colorbar(contour, ax=ax, shrink=0.5, aspect=20)
+        cbar.set_label('Magnitude (dB)', fontsize=12)
+        
+        # 设置坐标轴标签
+        ax.set_xlabel('Range (m)', fontsize=12, labelpad=10)
+        ax.set_ylabel('Velocity (m/s)', fontsize=12, labelpad=10)
+        ax.set_zlabel('Magnitude (dB)', fontsize=12, labelpad=10)
+        
+        # 设置视角
+        ax.view_init(elev=elevation, azim=azimuth)
+        
+        # 添加标题
+        ax.set_title(title, fontsize=14, pad=20)
+        
+        # 添加网格
+        ax.grid(True, linestyle='--', alpha=0.3)
+        
+        # 添加雷达参数信息
+        param_text = (
+            f"Bandwidth: {params['bandwidth']/1e6:.1f} MHz\n"
+            f"PRF: {params['prf']/1e3:.1f} kHz\n"
+            f"Pulses: {params['pulses']}\n"
+            f"Range Res: {range_resolution:.2f} m\n"
+            f"Velocity Res: {velocity_resolution:.2f} m/s"
+        )
+        ax.text2D(0.02, 0.98, param_text, transform=ax.transAxes, 
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        
+        # 优化布局
+        plt.tight_layout()
+        
+        # 保存图像
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"3D RD contour map saved to {save_path}")
+        
+        # 显示图像
+        if show:
+            plt.show()
+        
+        return fig
+
+    def plot_3d_rd_map_wireframe(self, rd_map: np.ndarray = None, title: str = "3D Range-Doppler Wireframe", # type: ignore
+                                figsize: tuple = (14, 10), cmap: str = "jet",
+                                elevation: float = 30, azimuth: float = 45,
+                                save_path: str = None, show: bool = True): # type: ignore
+        """
+        绘制三维距离-多普勒线框图，突出显示峰值结构
+        
+        参数与plot_3d_rd_map相同
+        """
+        if rd_map is None and self.last_obs is not None:
+            rd_map = self.last_obs['rd_map']
+        elif rd_map is None:
+            raise ValueError("No RD map available to plot")
+        
+        # 获取雷达参数
+        params = self.get_current_radar_params()
+        
+        # 计算距离和多普勒轴
+        range_resolution = params['range_resolution']
+        velocity_resolution = params['velocity_resolution']
+        max_unambiguous_range = 3000 # params['max_unambiguous_range']
+        max_unambiguous_velocity = params['max_unambiguous_velocity']
+        
+        # 创建距离轴和多普勒轴
+        range_bins = rd_map.shape[0]
+        doppler_bins = rd_map.shape[1]
+        
+        range_axis = np.linspace(0, max_unambiguous_range, range_bins)
+        doppler_axis = np.linspace(-max_unambiguous_velocity, max_unambiguous_velocity, doppler_bins)
+        
+        # 创建网格
+        R, V = np.meshgrid(range_axis, doppler_axis, indexing='ij')
+        
+        # 计算幅度(dB尺度)
+        magnitude = np.abs(rd_map)
+        db_magnitude = 10 * np.log10(magnitude + 1e-9)  # 避免log(0)
+        
+        # 创建3D图形
+        fig = plt.figure(figsize=figsize)
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # 绘制线框图
+        wireframe = ax.plot_wireframe(R, V, db_magnitude, rstride=5, cstride=5, 
+                                    color='blue', alpha=0.6, linewidth=0.5)
+        
+        # 设置坐标轴标签
+        ax.set_xlabel('Range (m)', fontsize=12, labelpad=10)
+        ax.set_ylabel('Velocity (m/s)', fontsize=12, labelpad=10)
+        ax.set_zlabel('Magnitude (dB)', fontsize=12, labelpad=10)
+        
+        # 设置视角
+        ax.view_init(elev=elevation, azim=azimuth)
+        
+        # 添加标题
+        ax.set_title(title, fontsize=14, pad=20)
+        
+        # 添加网格
+        ax.grid(True, linestyle='--', alpha=0.3)
+        
+        # 添加雷达参数信息
+        param_text = (
+            f"Bandwidth: {params['bandwidth']/1e6:.1f} MHz\n"
+            f"PRF: {params['prf']/1e3:.1f} kHz\n"
+            f"Pulses: {params['pulses']}\n"
+            f"Range Res: {range_resolution:.2f} m\n"
+            f"Velocity Res: {velocity_resolution:.2f} m/s"
+        )
+        ax.text2D(0.02, 0.98, param_text, transform=ax.transAxes, 
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        
+        # 优化布局
+        plt.tight_layout()
+        
+        # 保存图像
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"3D RD wireframe map saved to {save_path}")
+        
+        # 显示图像
+        if show:
+            plt.show()
+        
+        return fig
 def main():
     # 创建雷达仿真器
     radar_sim = RadarSimulator("PD-LS02")
@@ -317,7 +664,7 @@ def main():
 
     # 创建目标
     target_1 = dict(location=(1000, 0, 100), speed=(-11.2, 0, 0), rcs=0.5, phase=0)
-    target_2 = dict(location=(2000, 0, 200), speed=(11 , 0, 0), rcs=0.5, phase=0)
+    target_2 = dict(location=(2000, 0, 200), speed=(52 , 0, 0), rcs=0.05, phase=0)
     targets = [target_1, target_2]  
 
     # 模拟雷达信号
@@ -325,6 +672,10 @@ def main():
 
     # 处理信号
     rd_map = radar_sim.process_signals(baseband)
+
+    # 使用替代方法检测目标
+    peaks = radar_sim.find_peaks(rd_map)
+    print(peaks)
 
     # 绘制RD图
     radar_sim.plot_rd_map(
@@ -334,6 +685,10 @@ def main():
         save_path="optimized_rd_map.png",
         show=True
     )
+    
+    # radar_sim.plot_3d_rd_map(rd_map, title="3D Range-Doppler Surface", save_path="3d_rd_surface.png")
+    # radar_sim.plot_3d_rd_map_contour(rd_map, title="3D Range-Doppler Contour", save_path="3d_rd_contour.png")
+    # radar_sim.plot_3d_rd_map_wireframe(rd_map, title="3D Range-Doppler Wireframe", save_path="3d_rd_wireframe.png")    
     
 if __name__ == "__main__":
     main()
