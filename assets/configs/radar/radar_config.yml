@@ -31,8 +31,8 @@ radars:
     baseband_gain: 40          # 基带增益 (dB)    
     max_unambiguous_range: 7500
     max_unambiguous_speed: 47.4
-    location: [50, 30, 3]
-    speed: [5, 0, 0]
+    location: [0, 0, 0]
+    speed: [0, 0, 0]
     description: "50kg级便携式设计，快速部署能力"
   
   # 3. 高分辨率城市雷达
