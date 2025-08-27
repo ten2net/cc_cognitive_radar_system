@@ -27,6 +27,13 @@ class RadarSimulator:
         self.default_radar = DefaultRadarFactory().create(radar_type)
         self.last_simulation = None
         self.last_obs = None
+        self.frame_results = {
+            'baseband': [],
+            'rd_maps': [],
+            'observations': [],
+            'peaks': [],
+            'targets_history': []
+        }        
 
     def reset_radar(self):
         self.radar = self.default_radar
@@ -219,6 +226,171 @@ class RadarSimulator:
         params['center_frequency'] = center_freq
         params['wavelength'] = wavelength
         return params
+    
+    def step(self, targets: list, time_step: float = 0.1, collect_results: bool = True) -> Dict[str, any]: # type: ignore
+        """
+        执行单帧雷达仿真，更新目标位置和速度
+        
+        参数:
+        - targets: 当前帧的目标列表，每个目标包含位置、速度等信息
+        - time_step: 时间步长（秒）
+        - collect_results: 是否收集结果用于后续分析
+        
+        返回:
+        - Dict[str, any]: 包含当前帧的仿真结果
+        """
+        # 更新目标位置（基于速度和加速度）
+        updated_targets = self._update_targets_position(targets, time_step)
+        
+        # 模拟雷达信号
+        baseband = self.simulate(updated_targets)
+        
+        # 处理信号
+        rd_map = self.process_signals(baseband)
+        
+        # 获取观测结果
+        observation = self.get_observation(baseband)
+        
+        # 检测峰值
+        peaks = self.find_peaks(rd_map)
+        
+        # 收集结果（如果启用）
+        if collect_results:
+            self.frame_results['baseband'].append(baseband)
+            self.frame_results['rd_maps'].append(rd_map)
+            self.frame_results['observations'].append(observation)
+            self.frame_results['peaks'].append(peaks)
+            self.frame_results['targets_history'].append(updated_targets.copy())        
+        
+        # 返回当前帧结果和更新后的目标
+        frame_result = {
+            'baseband': baseband,
+            'rd_map': rd_map,
+            'observation': observation,
+            'peaks': peaks,
+            'updated_targets': updated_targets
+        }
+        
+        return frame_result
+    
+    def clear_results(self):
+        """清空收集的结果"""
+        self.frame_results = {
+            'baseband': [],
+            'rd_maps': [],
+            'observations': [],
+            'peaks': [],
+            'targets_history': []
+        }  
+    def get_collected_results(self) -> Dict[str, list]:
+        """获取收集的所有帧结果"""
+        return self.frame_results   
+    
+    def plot_trajectory_from_collected(self, save_path: str = None, show: bool = True): # type: ignore
+        """
+        使用收集的结果绘制航迹对比图
+        """
+        if not self.frame_results['targets_history']:
+            print("No collected results available. Run step() with collect_results=True first.")
+            return None
+        
+        return self.plot_trajectory_comparison(self.frame_results, save_path, show)           
+
+    def _update_targets_position(self, targets: list, time_step: float) -> list:
+        """
+        根据目标的速度和加速度更新目标位置
+        
+        参数:
+        - targets: 当前帧的目标列表
+        - time_step: 时间步长（秒）
+        
+        返回:
+        - list: 更新后的目标列表
+        """
+        updated_targets = []
+        
+        for target in targets:
+            # 复制目标以避免修改原始数据
+            new_target = target.copy()
+            
+            # 提取当前位置和速度
+            location = np.array(target['location'])
+            speed = np.array(target.get('speed', (0, 0, 0)))
+            acceleration = np.array(target.get('acceleration', (0, 0, 0)))
+            
+            # 更新速度（考虑加速度）
+            new_speed = speed + acceleration * time_step
+            
+            # 更新位置
+            new_location = location + new_speed * time_step
+            
+            # 更新目标信息
+            new_target['location'] = tuple(new_location)
+            new_target['speed'] = tuple(new_speed)
+            
+            updated_targets.append(new_target)
+        
+        return updated_targets
+
+    def simulate_multiple_frames(self, initial_targets: list, frame_count: int = 10, 
+                            time_step: float = 0.1) -> Dict[str, list]:
+        """
+        执行多帧仿真（使用step函数）
+        
+        参数:
+        - initial_targets: 初始目标列表
+        - frame_count: 仿真帧数
+        - time_step: 每帧时间步长（秒）
+        
+        返回:
+        - Dict[str, list]: 包含所有帧的结果
+        """
+        all_results = {
+            'baseband': [],
+            'rd_maps': [],
+            'observations': [],
+            'peaks': [],
+            'targets_history': []
+        }
+        
+        current_targets = initial_targets.copy()
+        
+        for frame in range(frame_count):
+            print(f"Processing frame {frame + 1}/{frame_count}")
+            
+            # 执行单帧步进
+            frame_result = self.step(current_targets, time_step)
+            
+            # 保存结果
+            all_results['baseband'].append(frame_result['baseband'])
+            all_results['rd_maps'].append(frame_result['rd_map'])
+            all_results['observations'].append(frame_result['observation'])
+            all_results['peaks'].append(frame_result['peaks'])
+            all_results['targets_history'].append(frame_result['updated_targets'])
+            
+            # 更新目标用于下一帧
+            current_targets = frame_result['updated_targets']
+        
+        return all_results
+
+    def add_acceleration_to_targets(self, targets: list, acceleration: tuple = (0, 0, 0)):
+        """
+        为目标添加加速度信息
+        
+        参数:
+        - targets: 目标列表
+        - acceleration: 加速度向量 (ax, ay, az)
+        
+        返回:
+        - list: 添加加速度后的目标列表
+        """
+        accelerated_targets = []
+        for target in targets:
+            new_target = target.copy()
+            new_target['acceleration'] = acceleration
+            accelerated_targets.append(new_target)
+        
+        return accelerated_targets    
 
     def find_peaks(self, rd_map, size=9, threshold=10, num_peaks=10):
         """
@@ -297,6 +469,242 @@ class RadarSimulator:
         peak_info.sort(key=lambda x: x['intensity'], reverse=True)
 
         return peak_info
+    
+    def plot_trajectory_comparison(self, results: Dict[str, list], save_path: str = None, show: bool = True):
+        """
+        绘制目标实际航迹和检测航迹对比图
+        
+        参数:
+        - results: simulate_multiple_frames返回的结果字典
+        - save_path: 保存路径
+        - show: 是否显示图表
+        """
+        frame_count = len(results['targets_history'])
+        time_steps = np.arange(frame_count)
+        
+        # 创建图表
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+        
+        # 提取实际目标信息
+        actual_ranges = []  # 实际距离
+        actual_velocities = []  # 实际速度
+        target_count = len(results['targets_history'][0])
+        
+        for frame_targets in results['targets_history']:
+            frame_ranges = []
+            frame_velocities = []
+            for target in frame_targets:
+                # 计算实际距离（假设雷达在原点）
+                distance = np.sqrt(target['location'][0]**2 + 
+                                target['location'][1]**2 + 
+                                target['location'][2]**2)
+                frame_ranges.append(distance)
+                
+                # 计算径向速度（假设雷达在原点看向x方向）
+                radial_speed = target['speed'][0]  # 简化假设
+                frame_velocities.append(radial_speed)
+            
+            actual_ranges.append(frame_ranges)
+            actual_velocities.append(frame_velocities)
+        
+        # 提取检测到的目标信息
+        detected_ranges = []  # 检测距离
+        detected_velocities = []  # 检测速度
+        
+        for frame_peaks in results['peaks']:
+            frame_detected_ranges = []
+            frame_detected_velocities = []
+            
+            # 对每个实际目标，找到最接近的检测目标
+            for target_idx in range(target_count):
+                closest_range = None
+                closest_velocity = None
+                min_distance = float('inf')
+                
+                for peak in frame_peaks:
+                    # 计算检测目标与实际目标的匹配度
+                    range_diff = abs(peak['range'] - actual_ranges[-1][target_idx])
+                    velocity_diff = abs(peak['velocity'] - actual_velocities[-1][target_idx])
+                    total_diff = range_diff + velocity_diff * 0.1  # 加权
+                    
+                    if total_diff < min_distance:
+                        min_distance = total_diff
+                        closest_range = peak['range']
+                        closest_velocity = peak['velocity']
+                
+                frame_detected_ranges.append(closest_range)
+                frame_detected_velocities.append(closest_velocity)
+            
+            detected_ranges.append(frame_detected_ranges)
+            detected_velocities.append(frame_detected_velocities)
+        
+        # 绘制距离对比图
+        colors = ['red', 'blue', 'green', 'orange', 'purple']
+        markers = ['o', 's', '^', 'D', 'v']
+        
+        for target_idx in range(target_count):
+            # 实际航迹
+            actual_range_data = [r[target_idx] for r in actual_ranges]
+            ax1.plot(time_steps, actual_range_data, 
+                    color=colors[target_idx % len(colors)], 
+                    marker=markers[target_idx % len(markers)],
+                    linestyle='-', linewidth=2, markersize=6,
+                    label=f'Target {target_idx+1} Actual')
+            
+            # 检测航迹
+            detected_range_data = [r[target_idx] for r in detected_ranges if r[target_idx] is not None]
+            valid_time_steps = [t for t, r in zip(time_steps, detected_ranges) if r[target_idx] is not None]
+            
+            if detected_range_data:
+                ax1.plot(valid_time_steps, detected_range_data,
+                        color=colors[target_idx % len(colors)],
+                        marker=markers[target_idx % len(markers)],
+                        linestyle='--', linewidth=2, markersize=8,
+                        markerfacecolor='white', markeredgewidth=2,
+                        label=f'Target {target_idx+1} Detected')
+        
+        ax1.set_xlabel('Frame Number', fontsize=12)
+        ax1.set_ylabel('Range (m)', fontsize=12)
+        ax1.set_title('Range Trajectory: Actual vs Detected', fontsize=14)
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # 绘制速度对比图
+        for target_idx in range(target_count):
+            # 实际速度
+            actual_velocity_data = [v[target_idx] for v in actual_velocities]
+            ax2.plot(time_steps, actual_velocity_data,
+                    color=colors[target_idx % len(colors)],
+                    marker=markers[target_idx % len(markers)],
+                    linestyle='-', linewidth=2, markersize=6,
+                    label=f'Target {target_idx+1} Actual')
+            
+            # 检测速度
+            detected_velocity_data = [v[target_idx] for v in detected_velocities if v[target_idx] is not None]
+            valid_time_steps = [t for t, v in zip(time_steps, detected_velocities) if v[target_idx] is not None]
+            
+            if detected_velocity_data:
+                ax2.plot(valid_time_steps, detected_velocity_data,
+                        color=colors[target_idx % len(colors)],
+                        marker=markers[target_idx % len(markers)],
+                        linestyle='--', linewidth=2, markersize=8,
+                        markerfacecolor='white', markeredgewidth=2,
+                        label=f'Target {target_idx+1} Detected')
+        
+        ax2.set_xlabel('Frame Number', fontsize=12)
+        ax2.set_ylabel('Velocity (m/s)', fontsize=12)
+        ax2.set_title('Velocity Trajectory: Actual vs Detected', fontsize=14)
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        # 计算并显示性能指标
+        self._display_performance_metrics(actual_ranges, detected_ranges, 
+                                        actual_velocities, detected_velocities)
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"Trajectory comparison plot saved to {save_path}")
+        
+        if show:
+            plt.show()
+        
+        return fig
+
+    def _display_performance_metrics(self, actual_ranges, detected_ranges, 
+                                actual_velocities, detected_velocities):
+        """
+        显示检测性能指标
+        """
+        print("\n" + "="*50)
+        print("Detection Performance Metrics")
+        print("="*50)
+        
+        target_count = len(actual_ranges[0])
+        frame_count = len(actual_ranges)
+        
+        for target_idx in range(target_count):
+            range_errors = []
+            velocity_errors = []
+            detection_count = 0
+            
+            for frame in range(frame_count):
+                if (detected_ranges[frame][target_idx] is not None and 
+                    detected_velocities[frame][target_idx] is not None):
+                    
+                    range_error = abs(detected_ranges[frame][target_idx] - actual_ranges[frame][target_idx])
+                    velocity_error = abs(detected_velocities[frame][target_idx] - actual_velocities[frame][target_idx])
+                    
+                    range_errors.append(range_error)
+                    velocity_errors.append(velocity_error)
+                    detection_count += 1
+            
+            if range_errors:
+                avg_range_error = np.mean(range_errors)
+                avg_velocity_error = np.mean(velocity_errors)
+                detection_rate = detection_count / frame_count * 100
+                
+                print(f"Target {target_idx+1}:")
+                print(f"  Detection Rate: {detection_rate:.1f}%")
+                print(f"  Avg Range Error: {avg_range_error:.2f} m")
+                print(f"  Avg Velocity Error: {avg_velocity_error:.2f} m/s")
+                print(f"  Max Range Error: {max(range_errors):.2f} m")
+                print(f"  Max Velocity Error: {max(velocity_errors):.2f} m/s")
+            else:
+                print(f"Target {target_idx+1}: No detections")
+            
+            print("-" * 30)
+
+    def plot_2d_trajectory(self, results: Dict[str, list], save_path: str = None, show: bool = True):
+        """
+        绘制2D空间轨迹图（X-Y平面）
+        """
+        fig, ax = plt.subplots(figsize=(10, 8))
+        
+        # 提取目标位置历史
+        target_count = len(results['targets_history'][0])
+        colors = ['red', 'blue', 'green', 'orange', 'purple']
+        print( target_count)
+        for target_idx in range(target_count):
+            x_positions = []
+            y_positions = []
+            
+            for frame_targets in results['targets_history']:
+                target = frame_targets[target_idx]
+                x_positions.append(target['location'][0])
+                y_positions.append(target['location'][1])
+            
+            # 绘制实际轨迹
+            ax.plot(x_positions, y_positions, 
+                color=colors[target_idx % len(colors)],
+                marker='o', markersize=6, linestyle='-',
+                linewidth=2, label=f'Target {target_idx+1} Actual')
+            
+            # 标记起点和终点
+            ax.plot(x_positions[0], y_positions[0], 'o', 
+                markersize=10, color=colors[target_idx % len(colors)],
+                markerfacecolor='white', markeredgewidth=2)
+            ax.plot(x_positions[-1], y_positions[-1], 's', 
+                markersize=10, color=colors[target_idx % len(colors)],
+                markerfacecolor='white', markeredgewidth=2)
+        
+        ax.set_xlabel('X Position (m)', fontsize=12)
+        ax.set_ylabel('Y Position (m)', fontsize=12)
+        ax.set_title('2D Spatial Trajectory', fontsize=14)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_aspect('equal')
+        
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        
+        if show:
+            plt.show()
+        
+        return fig    
 
     def smart_colorbar_ticks(self, data, vmin=None, vmax=None):
         """
@@ -463,6 +871,95 @@ class RadarSimulator:
             plt.show()
 
         return fig
+    
+    def generate_rd_animation(
+        self,
+        results: Dict[str, list],
+        output_path: str = "rd_animation.gif",
+        fps: int = 2,
+        dpi: int = 100,
+        cmap: str = "jet",
+        show_progress: bool = True
+    ):
+        """
+        生成RD图动画(GIF/MP4)
+        
+        参数:
+        - results: simulate_multiple_frames返回的结果字典
+        - output_path: 输出文件路径(.gif或.mp4)
+        - fps: 帧率
+        - dpi: 图像分辨率
+        - cmap: 颜色映射
+        - show_progress: 是否显示进度
+        """
+        import matplotlib.animation as animation
+        from matplotlib.animation import FFMpegWriter, PillowWriter
+        import os        
+        if not results['rd_maps']:
+            raise ValueError("No RD maps found in results")
+
+        # 创建图形和坐标轴
+        fig, ax = plt.subplots(figsize=(10, 6))
+        plt.close()  # 防止重复显示静态图
+
+        # 初始化图像
+        first_rd = results['rd_maps'][0]
+        magnitude = np.abs(first_rd)
+        db_magnitude = 10 * np.log10(magnitude + 1e-9)
+        im = ax.imshow(db_magnitude, aspect='auto', cmap=cmap, origin='lower')
+        
+        # 设置坐标轴
+        params = self.get_current_radar_params()
+        max_velocity = params['max_unambiguous_velocity']
+        max_range = 3000  # 可根据需要调整
+        
+        ax.set_xlabel('Range (m)')
+        ax.set_ylabel('Velocity (m/s)')
+        ax.set_title('Range-Doppler Map Animation')
+        
+        # 设置颜色条
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.set_label('Magnitude (dB)')
+
+        # 动画更新函数
+        def update(frame):
+            rd_map = results['rd_maps'][frame]
+            magnitude = np.abs(rd_map)
+            db_magnitude = 10 * np.log10(magnitude + 1e-9)
+            
+            im.set_array(db_magnitude)
+            im.set_clim(vmin=np.min(db_magnitude), vmax=np.max(db_magnitude))
+            
+            ax.set_title(f'Frame {frame + 1}/{len(results["rd_maps"])}')
+            
+            if show_progress:
+                print(f"Processing frame {frame + 1}/{len(results['rd_maps'])}")
+            
+            return [im]
+
+        # 创建动画
+        anim = animation.FuncAnimation(
+            fig,
+            update,
+            frames=len(results['rd_maps']),
+            interval=1000/fps,
+            blit=True
+        )
+
+        # 保存动画
+        output_ext = os.path.splitext(output_path)[1].lower()
+        
+        if output_ext == '.gif':
+            writer = PillowWriter(fps=fps)
+            anim.save(output_path, writer=writer, dpi=dpi)
+        elif output_ext == '.mp4':
+            writer = FFMpegWriter(fps=fps, metadata=dict(title='RD Map Animation'))
+            anim.save(output_path, writer=writer, dpi=dpi)
+        else:
+            raise ValueError("Unsupported output format. Use .gif or .mp4")
+
+        print(f"Animation saved to {output_path}")
+        return anim    
 
     def plot_3d_rd_map(self, rd_map: np.ndarray = None, title: str = "3D Range-Doppler Map",  # type: ignore
                        figsize: tuple = (14, 10), cmap: str = "jet",
@@ -648,6 +1145,104 @@ class RadarSimulator:
             plt.show()
 
         return fig
+    
+def interactive_simulation():
+    """
+    交互式单帧仿真示例
+    """
+    radar_sim = RadarSimulator("PD-LS02")
+    
+    # 创建复杂运动目标
+    target_1 = dict(location=(800, 200, 100), speed=(-25, -5, 0), rcs=0.8, phase=0)
+    target_2 = dict(location=(1500, -100, 200), speed=(-15, 0, 0), rcs=0.3, phase=0)
+    targets = [target_1, target_2]
+    
+    radar_sim.clear_results()
+    current_targets = targets.copy()
+    
+    print("交互式仿真模式 - 按回车继续下一帧，输入 'q' 退出")
+    
+    frame_idx = 0
+    while True:
+        user_input = input(f"帧 {frame_idx + 1} - 按回车继续或输入 'q' 退出: ")
+        
+        if user_input.lower() == 'q':
+            break
+        
+        # 执行单帧
+        result = radar_sim.step(current_targets, time_step=0.3, collect_results=True)
+        current_targets = result['updated_targets']
+        
+        # 显示当前帧结果
+        peaks = result['peaks']
+        print(f"检测结果: {len(peaks)} 个目标")
+        for i, peak in enumerate(peaks):
+            print(f"  目标 {i+1}: 距离={peak['range']:6.1f}m, 速度={peak['velocity']:6.1f}m/s")
+        
+        frame_idx += 1
+    
+    # 绘制最终航迹图
+    if frame_idx > 0:
+        radar_sim.plot_trajectory_from_collected(show=True,save_path="interactive_simulation_trajectory.png",)
+        print(f"共仿真了 {frame_idx} 帧")
+
+def real_time_visualization():
+    """
+    实时可视化示例（每帧都显示RD图）
+    """
+    radar_sim = RadarSimulator("PD-LS02")
+    
+    target_1 = dict(location=(1000, -50, 100), speed=(-20, -10, 0), rcs=0.5, phase=0)
+    target_2 = dict(location=(1200, 200, 200), speed=(40, 10, 0), rcs=0.1, phase=0)
+    targets = [target_1, target_2]
+    
+    radar_sim.clear_results()
+    current_targets = targets.copy()
+    
+    for frame in range(5):
+        print(f"处理第 {frame + 1} 帧...")
+        
+        result = radar_sim.step(current_targets, time_step=0.2, collect_results=True)
+        current_targets = result['updated_targets']
+        
+        # 实时显示当前帧的RD图
+        radar_sim.plot_rd_map(
+            rd_map=result['rd_map'],
+            title=f"Frame {frame + 1} - Range-Doppler Map",
+            save_path=f"real_time_visualization_{frame + 1}.png",
+            show=True
+        )
+    
+    # 最后显示航迹对比图
+    radar_sim.plot_trajectory_from_collected(save_path="real_time_visualization_trajectory.png",
+                                             show=True)  
+    
+def generate_rd_animation():
+    # 1. 初始化雷达仿真器
+    radar_sim = RadarSimulator("PD-LS02")
+    
+    # 2. 创建目标场景
+    targets = [
+        dict(location=(1000, -50, 100), speed=(-20, -20, 0), rcs=0.5),
+        dict(location=(2000, 50, 200), speed=(40, 20, 0), rcs=0.1)
+    ]
+    
+    # 3. 运行多帧仿真
+    results = radar_sim.simulate_multiple_frames(
+        initial_targets=targets,
+        frame_count=20,
+        time_step=0.3
+    )
+    
+    # 4. 生成动画
+    radar_sim.generate_rd_animation(
+        results=results,
+        output_path="rd_animation.mp4",  # 或 .gif
+        fps=5,
+        dpi=150,
+        cmap="viridis"
+    )         
+
         
 def main():
     # 创建雷达仿真器
@@ -673,36 +1268,106 @@ def main():
             print(f"  {key}: {value}")
 
     # 创建目标
-    target_1 = dict(location=(1000, 0, 100),
-                    speed=(-20, 0, 0), rcs=0.5, phase=0)
-    target_2 = dict(location=(2000, 0,200), 
-                    speed=(40, 0, 0), rcs=0.1, phase=0)
+    target_1 = dict(location=(1000, -50, 100),
+                    speed=(-20, 10, 0), rcs=0.5, phase=0)
+    target_2 = dict(location=(2000, -100,200), 
+                    speed=(40, 15, 0), rcs=0.1, phase=0)
     targets = [target_1, target_2]
-
-    # 模拟雷达信号
-    baseband = radar_sim.simulate(targets)
-
-    # 处理信号
-    rd_map = radar_sim.process_signals(baseband)
-    # 使用不同的窗函数进行比较
-    radar_sim.compare_window_functions(baseband)
-
-    # 使用替代方法检测目标
-    peaks = radar_sim.find_peaks(rd_map)
-    pprint(peaks, indent=2, width=40, depth=4)
-
-    # 绘制RD图
-    radar_sim.plot_rd_map(
-        rd_map=rd_map,
-        title="Optimized Radar Range-Doppler Map",
-        cmap="jet",
-        save_path="optimized_rd_map.png",
+    
+    
+    # 添加加速度（可选）
+    targets_with_accel = radar_sim.add_acceleration_to_targets(targets, acceleration=(0, 0, -2))
+    
+    # 方法1: 单帧步进
+    print("单帧步进示例:")
+    current_targets = targets_with_accel.copy()
+    frame_count = 20
+    for frame in range(frame_count):
+        print(f"\n帧 {frame + 1}:")
+        result = radar_sim.step(current_targets, time_step=1.0)
+        # 显示检测结果
+        peaks = result['peaks']
+        print(f"检测到 {len(peaks)} 个目标")
+        for i, peak in enumerate(peaks[:5]):
+            print(f"  目标 {i+1}: 距离={peak['range']}m, 速度={peak['velocity']}m/s")
+            
+        # 绘制RD图
+        radar_sim.plot_rd_map(
+            rd_map=result['rd_map'],
+            title="Optimized Radar Range-Doppler Map",
+            cmap="jet",
+            save_path=f"optimized_rd_map_{frame + 1}.png",
+            show=True
+        )            
+        
+        # 更新目标用于下一帧
+        current_targets = result['updated_targets']   
+        
+    print("\n仿真完成，开始绘制航迹对比图...")        
+    # 方法1: 使用收集的结果直接绘制
+    radar_sim.plot_trajectory_from_collected(
+        save_path="single_step_trajectory.png",
         show=True
     )
+    
+    # 方法2: 手动获取结果并绘制
+    collected_results = radar_sim.get_collected_results()
+    radar_sim.plot_trajectory_comparison(
+        results=collected_results,
+        save_path="manual_trajectory.png",
+        show=True
+    )
+    
+    # 绘制2D空间轨迹
+    radar_sim.plot_2d_trajectory(
+        results=collected_results,
+        save_path="2d_trajectory_single_step.png",
+        show=True
+    )     
 
-    radar_sim.plot_3d_rd_map(rd_map, title="3D Range-Doppler Surface", save_path="3d_rd_surface.png")
-    radar_sim.plot_3d_rd_map_contour(rd_map, title="3D Range-Doppler Contour", save_path="3d_rd_contour.png")
+    # # 模拟雷达信号
+    # baseband = radar_sim.simulate(targets)
+
+    # # 处理信号
+    # rd_map = radar_sim.process_signals(baseband)
+    # # 使用不同的窗函数进行比较
+    # radar_sim.compare_window_functions(baseband)
+
+    # # 使用替代方法检测目标
+    # peaks = radar_sim.find_peaks(rd_map)
+    # pprint(peaks, indent=2, width=40, depth=4)
+
+    # # 绘制RD图
+    # radar_sim.plot_rd_map(
+    #     rd_map=rd_map,
+    #     title="Optimized Radar Range-Doppler Map",
+    #     cmap="jet",
+    #     save_path="optimized_rd_map.png",
+    #     show=True
+    # )
+
+    # radar_sim.plot_3d_rd_map(rd_map, title="3D Range-Doppler Surface", save_path="3d_rd_surface.png")
+    # radar_sim.plot_3d_rd_map_contour(rd_map, title="3D Range-Doppler Contour", save_path="3d_rd_contour.png")
 
 
 if __name__ == "__main__":
-    main()
+    # 选择不同的运行模式
+    print("选择运行模式:")
+    print("1. 基本单帧仿真")
+    print("2. 交互式仿真")
+    print("3. 实时可视化")
+    print("4. 生成仿真动画")
+    
+    choice = input("输入选择 (1-4): ")
+    
+    if choice == "1":
+        main()
+    elif choice == "2":
+        interactive_simulation()
+    elif choice == "3":
+        real_time_visualization()
+    elif choice == "4":
+        generate_rd_animation()
+    else:
+        print("无效选择，运行基本模式")
+        main()
