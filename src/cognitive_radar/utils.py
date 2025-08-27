@@ -63,7 +63,8 @@ class RadarVisualizer:
         
         # 初始化绘图元素
         self.radar_point = None
-        self.beam_wedge = None
+        self.beam_wedges = []  # 改为列表存储多个波束
+        self.beam_surfaces = []  # 改为列表存储多个3D波束
         self.target_points = []
         self.target_trajectories = []
         self.detected_points = []
@@ -129,9 +130,14 @@ class RadarVisualizer:
         self.detected_points = []
         
         # 清除波束
-        if self.beam_wedge:
-            self.beam_wedge.remove()
-            self.beam_wedge = None
+        for wedge in self.beam_wedges:
+            wedge.remove()
+        self.beam_wedges = []
+        
+        # 清除3D波束
+        for surface in self.beam_surfaces:
+            surface.remove()
+        self.beam_surfaces = []
         
         # 清除距离-多普勒图
         if self.rd_image:
@@ -155,28 +161,48 @@ class RadarVisualizer:
         self.ax_top.scatter(0, 0, c='r', marker='o', s=50, label='Radar')
     
     def _draw_beam(self, radar_params):
-        """绘制雷达波束"""
-        beam_az = radar_params.get('beam_az', 0)
-        beam_el = radar_params.get('beam_el', 0)
+        """绘制雷达波束（支持多波束）"""
+        beam_azs = radar_params.get('beam_az', [0])
+        beam_els = radar_params.get('beam_el', [0])
         beam_width = 10  # 假设波束宽度为10度
         
-        # 在俯视图中绘制波束
-        beam_start = np.radians(beam_az - beam_width/2)
-        beam_end = np.radians(beam_az + beam_width/2)
-        self.beam_wedge = Wedge((0, 0), self.max_range, 
-                               np.degrees(beam_start), np.degrees(beam_end), 
-                               width=self.max_range, alpha=0.2, color='blue')
-        self.ax_top.add_patch(self.beam_wedge)
+        # 确保 beam_azs 和 beam_els 是数组
+        if not hasattr(beam_azs, '__len__'):
+            beam_azs = [beam_azs]
+        if not hasattr(beam_els, '__len__'):
+            beam_els = [beam_els]
         
-        # 在3D视图中绘制波束
-        # 简化表示：绘制一个锥体
-        theta = np.linspace(beam_start, beam_end, 20)
-        r = np.linspace(0, self.max_range, 10)
-        theta, r = np.meshgrid(theta, r)
-        x = r * np.cos(theta)
-        y = r * np.sin(theta)
-        z = r * np.tan(np.radians(beam_el))
-        self.ax_3d.plot_surface(x, y, z, alpha=0.2, color='blue')
+        # 确保两个数组长度相同
+        if len(beam_azs) != len(beam_els):
+            min_len = min(len(beam_azs), len(beam_els))
+            beam_azs = beam_azs[:min_len]
+            beam_els = beam_els[:min_len]
+        
+        print(f"绘制 {len(beam_azs)} 个波束")
+        
+        # 为每个波束绘制
+        for i, (beam_az, beam_el) in enumerate(zip(beam_azs, beam_els)):
+            print(f"波束 {i+1}: 方位角 {beam_az}°, 俯仰角 {beam_el}°")
+            
+            # 在俯视图中绘制波束
+            beam_start = np.radians(beam_az - beam_width/2)
+            beam_end = np.radians(beam_az + beam_width/2)
+            wedge = Wedge((0, 0), self.max_range, 
+                         np.degrees(beam_start), np.degrees(beam_end), 
+                         width=self.max_range, alpha=0.2, color='blue')
+            self.ax_top.add_patch(wedge)
+            self.beam_wedges.append(wedge)
+            
+            # 在3D视图中绘制波束
+            # 简化表示：绘制一个锥体
+            theta = np.linspace(beam_start, beam_end, 20)
+            r = np.linspace(0, self.max_range, 10)
+            theta, r = np.meshgrid(theta, r)
+            x = r * np.cos(theta)
+            y = r * np.sin(theta)
+            z = r * np.tan(np.radians(beam_el))
+            surface = self.ax_3d.plot_surface(x, y, z, alpha=0.2, color='blue')
+            self.beam_surfaces.append(surface)
     
     def _draw_targets(self, targets, targets_in_beam=None):
         """绘制目标"""
@@ -214,7 +240,7 @@ class RadarVisualizer:
     def _draw_range_doppler(self, processed_data):
         """绘制距离-多普勒图"""
         # 假设processed_data是距离-多普勒矩阵
-                # 转换复数数据为dB幅度
+        # 转换复数数据为dB幅度
         # 加1e-10避免log(0)错误
         db_data = 20 * np.log10(np.abs(processed_data) + 1e-10)         # type: ignore
         extent = [0, self.max_range, -100, 100]  # [xmin, xmax, ymin, ymax]
@@ -229,13 +255,27 @@ class RadarVisualizer:
     
     def _display_params(self, radar_params):
         """显示雷达参数"""
+        beam_azs = radar_params.get('beam_az', [0])
+        beam_els = radar_params.get('beam_el', [0])
+        
+        # 确保是数组
+        if not hasattr(beam_azs, '__len__'):
+            beam_azs = [beam_azs]
+        if not hasattr(beam_els, '__len__'):
+            beam_els = [beam_els]
+        
+        # 显示波束数量和前几个波束的方向
+        beam_info = f"波束数量: {len(beam_azs)}\n"
+        if len(beam_azs) > 0:
+            beam_info += f"前3个波束方位角: {beam_azs[:3]}\n"
+            beam_info += f"前3个波束俯仰角: {beam_els[:3]}"
+        
         param_text = (
             # f"Frequency: {radar_params.get('frequency', 0)/1e9:.2f} GHz\n"
             # f"Pulse Width: {radar_params.get('pulse_width', 0)*1e6:.2f} μs\n"
             # f"PRF: {radar_params.get('prf', 0)/1e3:.2f} kHz\n"
             # f"Gain: {radar_params.get('gain', 0):.1f} dB\n"
-            f"Beam Az: {radar_params.get('beam_az', 0):.1f}°\n"
-            f"Beam El: {radar_params.get('beam_el', 0):.1f}°"
+            beam_info
         )
         
         self.param_text = self.ax_params.text(
@@ -277,14 +317,14 @@ def main():
   # 创建可视化器
   visualizer = RadarVisualizer(render_mode='human', max_range=1000)
 
-  # 模拟雷达参数
+  # 模拟雷达参数（多波束）
   radar_params = {
       'frequency': 77e9,
       'pulse_width': 10e-6,
       'prf': 10e3,
       'gain': 20,
-      'beam_az': 30,
-      'beam_el': 5
+      'beam_az': [30, 40, 50],  # 多个方位角
+      'beam_el': [5, 10, 15]    # 多个俯仰角
   }
 
   # 模拟目标
@@ -317,4 +357,3 @@ def main():
   visualizer.close()  
 if __name__ == "__main__":
     main()
-   

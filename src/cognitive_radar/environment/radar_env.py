@@ -110,8 +110,8 @@ class CognitiveRadarEnv(gym.Env):
     def _setup_radar_limits(self):
         """Setup radar parameter limits based on radar configuration"""
         radar = self.simulator.radar
-        transmitter = radar.radar_prop['transmitter']
-        receiver = radar.radar_prop['receiver']
+        transmitter = radar.radar_prop['transmitter'] # type: ignore
+        receiver = radar.radar_prop['receiver'] # type: ignore
 
         # 辅助函数：确保值是标量
         def ensure_scalar(value):
@@ -192,7 +192,6 @@ class CognitiveRadarEnv(gym.Env):
         # Beam control
         params['beam_az'] = action['beam_control'][0] * self.max_beam_angle
         params['beam_el'] = action['beam_control'][1] * self.max_beam_angle
-
         # Waveform parameters
         freq_min, freq_max = self.frequency_range
         pw_min, pw_max = self.pulse_width_range
@@ -200,6 +199,7 @@ class CognitiveRadarEnv(gym.Env):
 
         params['frequency'] = freq_min + \
             (freq_max - freq_min) * (0.5 * (action['waveform_params'][0] + 1))
+ 
         params['pulse_width'] = pw_min + \
             (pw_max - pw_min) * (0.5 * (action['waveform_params'][1] + 1))
         params['prf'] = prf_min + (prf_max - prf_min) * \
@@ -209,7 +209,6 @@ class CognitiveRadarEnv(gym.Env):
         gain_min, gain_max = self.gain_range
         params['gain'] = gain_min + \
             (gain_max - gain_min) * (0.5 * (action['gain_control'][0] + 1))
-
         return params
 
     def _map_flat_action(self, action: np.ndarray) -> Dict[str, float]:
@@ -274,9 +273,10 @@ class CognitiveRadarEnv(gym.Env):
             else:
                 radar_params[key] = float(value)  # 确保是浮点数        
 
-            # Update radar parameters
-            self.simulator.update_radar_params(radar_params)
-
+        # Update radar parameters
+        print(radar_params)
+        self.simulator.update_radar(radar_params)
+        self.simulator.reset_radar()
         # Update scene (target movement)
         self.scenario_manager.update(self.current_time)
 
@@ -287,13 +287,33 @@ class CognitiveRadarEnv(gym.Env):
         # target_2 = dict(location=(70, 15*self.current_step, 8 + 2*self.current_step), speed=(-0.5 * self.current_step, 0, 0), rcs=0.5, phase=0)
         # target_3 = dict(location=(30* self.current_step, -5, 0), speed=(-22, 0, 0), rcs=5, phase=0)
 
-        # targets = [target_1, target_2]        
+        # targets = [target_1, target_2]    
+        target_1 = dict(location=(1000+ 100 * self.current_step , 0, 100), speed=(-11.2, 0, 0), rcs=0.5, phase=0)
+        target_2 = dict(location=(2000 - 100 * self.current_step, 0, 100), speed=(30 , 0, 0), rcs=0.5, phase=0)
+        targets = [target_1, target_2]             
         # print(">>>>>>>>>>>>>>targets", targets)
         # Run radar simulation
         baseband = self.simulator.simulate(targets)
 
         # Process radar data to get observation
         obs_dict = self.simulator.get_observation(baseband)
+        
+
+        # 使用替代方法检测目标
+        rd_map =obs_dict['rd_map']
+        # peaks = self.simulator.find_peaks(rd_map,num_peaks=3)
+        # print(peaks)
+
+        # 绘制RD图
+        self.simulator.plot_rd_map(
+            rd_map=rd_map,
+            title="Optimized Radar Range-Doppler Map",
+            cmap="jet",
+            save_path=f"optimized_rd_map_{self.current_step}.png",
+            show=True
+        )        
+        
+        
         obs = np.concatenate([
             obs_dict['rd_map'].flatten(),
             obs_dict['features']
@@ -421,15 +441,6 @@ class CognitiveRadarEnv(gym.Env):
         # Get current targets
         targets = self.scenario_manager.get_targets()
 
-        # Update visualizer with current state
-        self.visualizer.update(  # type: ignore
-            processed_data=self.simulator.last_obs['rd_map'],  # type: ignore
-            targets=targets,
-            radar_params=self.simulator.get_current_radar_params(),
-            targets_in_beam=self._get_targets_in_beam(
-                targets, self.simulator.get_current_radar_params())
-        )
-
         if self.render_mode == "rgb_array":
             return self.visualizer.get_rgb_array()  # type: ignore
         else:
@@ -532,6 +543,8 @@ class CognitiveRadarEnv(gym.Env):
         print(f"噪声水平: {noise_level:.1f}dB, 检测阈值: {detection_threshold:.1f}dB")
         print(f"距离分辨率: {range_res:.3f}m, 多普勒分辨率: {doppler_res:.3f}m/s")
         
+        peaks = self.simulator.find_peaks(processed_data,num_peaks=3)
+        print(peaks)
         for i, target in enumerate(targets):
             print(f"\n目标 #{i+1}:")
             x, y, z = target['location']
@@ -540,6 +553,8 @@ class CognitiveRadarEnv(gym.Env):
             # 计算距离
             true_range = np.sqrt(x**2 + y**2 + z**2)
             print(f"真实距离: {true_range:.1f}m")
+            
+            
             
             # 计算距离单元
             range_bin = int(np.clip(true_range / range_res, 0, processed_data.shape[0]-1))
@@ -590,45 +605,8 @@ class CognitiveRadarEnv(gym.Env):
         
         print(f"总检测奖励: {total_reward:.3f}")
         print("="*50)
-        return float(total_reward)    
-    def _calculate_detection_reward2(self, obs_dict: Dict, targets: List[Dict]) -> float:
-        """基于雷达方程计算目标检测奖励"""
-        processed_data = obs_dict['rd_map']
-        total_reward = 0
-        
-        # 获取雷达系统参数
-        radar_params = self.simulator.get_current_radar_params()
-        
-        # 1. 计算噪声基准（关键修正）
-        noise_floor = self._estimate_noise_floor(processed_data)
-        
-        for target in targets:
-            # 2. 计算目标理论信号强度（雷达方程）
-            theoretical_signal = self._calculate_theoretical_signal(target, radar_params)
-            
-            # 3. 获取实际测量信号
-            measured_signal = self._get_measured_signal(target, processed_data, radar_params)
-            
-            # 4. 计算信噪比(SNR)
-            snr = measured_signal / (noise_floor + 1e-9)  # 避免除零
-            
-            # 5. 转换为dB
-            snr_db = 10 * np.log10(snr + 1e-9)
-            
-            # 6. 设置检测阈值（典型雷达系统阈值）
-            detection_threshold = 10  # dB (典型值)
-            
-            if snr_db < detection_threshold:
-                continue  # 未检测到目标
-            
-            # 7. 计算检测置信度
-            detection_confidence = min(1.0, (snr_db - detection_threshold) / 20)
-            
-            # 8. 计算目标奖励
-            target_reward = detection_confidence * target.get('rcs', 1.0)
-            total_reward += target_reward
-        
-        return float(total_reward)
+        return float(total_reward)   
+
 
     def _estimate_noise_floor(self, rd_map):
         """
@@ -842,82 +820,47 @@ class CognitiveRadarEnv(gym.Env):
         return total_reward
 
     def _get_targets_in_beam(self, targets: List[Dict], radar_params: Dict) -> list:
-        """Get targets currently within the radar beam"""
+        """Get targets currently within any of the radar beams"""
         targets_in_beam = []
-        beam_az = radar_params.get('beam_az', 0)
-        beam_el = radar_params.get('beam_el', 0)
+        
+        # 获取波束参数并确保它们是 NumPy 数组
+        beam_az = np.array(radar_params.get('beam_az', [0]))
+        beam_el = np.array(radar_params.get('beam_el', [0]))
+        
         beam_width = 10.0  # Degrees, default beam width
-
+        
+        # 如果 beam_az 和 beam_el 是标量，转换为数组
+        if beam_az.ndim == 0:
+            beam_az = np.array([beam_az])
+        if beam_el.ndim == 0:
+            beam_el = np.array([beam_el])
+        
+        # 确保两个数组长度相同
+        if len(beam_az) != len(beam_el):
+            # 如果长度不同，使用较短的长度
+            min_len = min(len(beam_az), len(beam_el))
+            beam_az = beam_az[:min_len]
+            beam_el = beam_el[:min_len]
+        
         for target in targets:
             # Extract target position
             x, y, z = target['location']
-
+            
             # Calculate target angles relative to radar
             target_az = np.degrees(np.arctan2(y, x))
             target_el = np.degrees(np.arctan2(z, np.sqrt(x**2 + y**2)))
-
-            # Check if target is within beam
-            az_diff = abs(target_az - beam_az)
-            el_diff = abs(target_el - beam_el)
-
-            if az_diff < beam_width/2 and el_diff < beam_width/2:
+            
+            # 计算与所有波束的差异
+            az_diffs = np.abs(target_az - beam_az)
+            el_diffs = np.abs(target_el - beam_el)
+            
+            # 检查目标是否在任何波束内
+            in_any_beam = np.any((az_diffs < beam_width/2) & (el_diffs < beam_width/2))
+            
+            if in_any_beam:
                 targets_in_beam.append(target)
 
         return targets_in_beam
-
-    def randomize_environment(self) -> None:
-        """Randomize environment parameters for domain randomization"""
-        # Randomize scene
-        self.scenario_manager.clear_all_targets()
-        self._schedule_random_targets()
-
-        # Randomize radar parameters
-        self.simulator.randomize_radar()
-
-        # Update radar limits
-        self._setup_radar_limits()
-
-    def _schedule_random_targets(self):
-        """Schedule random targets for domain randomization"""
-        # Number of targets
-        num_targets = np.random.randint(1, 5)
-
-        # Schedule targets
-        for i in range(num_targets):
-            model_type = np.random.choice([
-                MotionModelType.HIGH_SPEED_DRONE,
-                MotionModelType.SWARM,
-                MotionModelType.SINUSOIDAL
-            ])  # type: ignore
-
-            # Random parameters
-            params = {
-                'create_time': 0,
-                'x_center': np.random.uniform(-100, 100),
-                'y_center': np.random.uniform(-100, 100),
-                'z_center': np.random.uniform(10, 100),
-                'rcs': np.random.uniform(0.1, 5.0),
-                'id_prefix': f"target_{i}"
-            }
-
-            if model_type == MotionModelType.HIGH_SPEED_DRONE:
-                params.update({
-                    'start_position': (np.random.uniform(-100, 100), np.random.uniform(-100, 100), np.random.uniform(10, 100)),
-                    'end_position': (np.random.uniform(100, 500), np.random.uniform(100, 500), np.random.uniform(50, 150)),
-                    'cruise_speed': np.random.uniform(30, 100),
-                    'end_time': np.random.uniform(20, 60)
-                })
-            elif model_type == MotionModelType.SWARM:
-                params.update({
-                    'num_targets': np.random.randint(3, 10),
-                    'area_size': np.random.uniform(20, 100)
-                })
-
-            self.scenario_manager.schedule_target(
-                create_time=0,
-                model_type=model_type,
-                **params
-            )
 
 
 def main():
@@ -926,7 +869,7 @@ def main():
 
     # 配置环境
     config = {
-        "radar_type": "PD-LS01",
+        "radar_type": "PD-LS02",
         "state_dim": 1024,       # 示例值
         "max_steps": 500,
         "render_mode": "human",  # 可选
@@ -942,21 +885,30 @@ def main():
             {
                 "model_type": MotionModelType.HIGH_SPEED_DRONE,
                 "params": {
-                    "start_position": [2000, 50, 50],
-                    "end_position": [10000, 200, 100],
+                    "start_position": [900, 50, 50],
+                    "end_position": [1000, 200, 100],
                     "cruise_speed": 30,
                     "rcs": 0.5
                 }
             },
             {
-                "model_type": MotionModelType.SWARM,
+                "model_type": MotionModelType.HIGH_SPEED_DRONE,
                 "params": {
-                    "num_targets": 1,
-                    "x_center": -1000,
-                    "y_center": -2000,
-                    "area_size": 20
+                    "start_position": [1900, 50, 50],
+                    "end_position": [2000, 200, 100],
+                    "cruise_speed": -30,
+                    "rcs": 0.5
                 }
-            }
+            },
+            # {
+            #     "model_type": MotionModelType.SWARM,
+            #     "params": {
+            #         "num_targets": 1,
+            #         "x_center": -1000,
+            #         "y_center": -2000,
+            #         "area_size": 20
+            #     }
+            # }
         ]
     }
 
@@ -969,7 +921,7 @@ def main():
     print("初始信息:", info.keys())
 
     # 随机策略测试
-    for _ in range(1):
+    for _ in range(10):
         action = env.action_space.sample()
         obs, reward, terminated, truncated, info = env.step(action)
         print(f"奖励: {reward:.4f}, 终止: {terminated}, 截断: {truncated}")
@@ -980,7 +932,6 @@ def main():
 
     # 关闭环境
     env.close()
-
 
 if __name__ == "__main__":
     main()

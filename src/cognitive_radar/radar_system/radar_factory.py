@@ -1,5 +1,6 @@
 import numpy as np
 from typing import Dict, List, Tuple, Optional
+from cognitive_radar.configs.config import RadarConfig
 from radarsimpy import Radar, Transmitter, Receiver
 from ..configs import get_radar_config_loader, get_radar_config
 from .base import RadarFactory
@@ -54,7 +55,8 @@ class DefaultRadarFactory(RadarFactory):
     def create(self, 
                      radar_type: str, 
                      location: Optional[Tuple[float, float, float]] = None,  
-                     speed: Optional[Tuple[float, float, float]] = None) -> Radar:
+                     speed: Optional[Tuple[float, float, float]] = None,
+                     params: Dict = {}) -> Radar:
         """
         创建雷达实例
         :param radar_type: 雷达型号 (如 PD-LS05)
@@ -65,14 +67,22 @@ class DefaultRadarFactory(RadarFactory):
         if radar_type not in self.radar_types:
             raise ValueError(f"不支持的雷达类型: {radar_type}")
         
-        config = self.radar_types[radar_type]
+        config:RadarConfig = self.radar_types[radar_type]
         
+        # 更新配置参数
+        config.frequency = [params.get('frequency', config.center_frequency) - config.bandwidth/2,
+                            params.get('frequency', config.center_frequency) + config.bandwidth/2] if 'frequency' in params else config.frequency
+        config.pulse_width = params.get('pulse_width', config.pulse_width)
+        config.tx_power = params.get('tx_power', config.tx_power)
+        # config.prp = 1 / params['prf'] if 'prf' in params else config.prp
+        config.rf_gain = params.get('gain', config.rf_gain)
+
         # 使用传入的位置和速度或默认值
         loc = location if location is not None else tuple(config.location)
         spd = speed if speed is not None else tuple(config.speed)
 
         # 示例：30 dB增益的方向图
-        antenna_gain = 30  # dBi
+        antenna_gain = config.rf_gain # 30  # dBi
         az_angle = np.arange(-20, 21, 1)
         az_pattern = 20 * np.log10(np.cos(az_angle / 180 * np.pi) ** 500) + antenna_gain
         el_angle = np.arange(-20, 21, 1)
