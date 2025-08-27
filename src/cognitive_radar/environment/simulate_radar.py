@@ -470,7 +470,7 @@ class RadarSimulator:
 
         return peak_info
     
-    def plot_trajectory_comparison(self, results: Dict[str, list], save_path: str = None, show: bool = True):
+    def plot_trajectory_comparison(self, results: Dict[str, list], save_path: str = None, show: bool = True): # type: ignore
         """
         绘制目标实际航迹和检测航迹对比图
         
@@ -656,7 +656,7 @@ class RadarSimulator:
             
             print("-" * 30)
 
-    def plot_2d_trajectory(self, results: Dict[str, list], save_path: str = None, show: bool = True):
+    def plot_2d_trajectory(self, results: Dict[str, list], save_path: str = None, show: bool = True): # type: ignore
         """
         绘制2D空间轨迹图（X-Y平面）
         """
@@ -1146,6 +1146,119 @@ class RadarSimulator:
 
         return fig
     
+    def plot_range_pulse_map(self, baseband: np.ndarray = None, title: str = "Range-Pulse Map",  # type: ignore
+                            figsize: tuple = (12, 8), cmap: str = "jet",
+                            save_path: str = None, show: bool = True):  # type: ignore
+        """
+        绘制距离-脉冲序号图（RP图）
+        横轴：距离（米）
+        纵轴：脉冲序号
+        
+        参数:
+        - baseband: 基带信号数据，如果为None则使用last_simulation中的数据
+        - title: 图表标题
+        - figsize: 图表尺寸
+        - cmap: 颜色映射
+        - save_path: 保存路径
+        - show: 是否显示图表
+        """
+        if baseband is None and self.last_simulation is not None:
+            baseband = self.last_simulation["baseband"]
+        elif baseband is None:
+            raise ValueError("No baseband data available to plot")
+        
+        # 获取雷达参数
+        params = self.get_current_radar_params()
+        
+        # 计算每个脉冲的采样点数
+        samples_per_pulse = params['samples_per_pulse']
+        pulses = params['pulses']
+        
+        # 确保数据形状正确
+        if baseband.ndim == 3:
+            baseband = baseband.squeeze(0)  # 移除通道维度
+        
+        # 对每个脉冲进行距离FFT
+        range_profiles = []
+        for pulse_idx in range(pulses):
+            # 提取当前脉冲的数据
+            pulse_data = baseband[pulse_idx, :]
+            
+            # 进行距离FFT
+            range_fft = np.fft.fft(pulse_data, n=samples_per_pulse)
+            range_profile = np.abs(range_fft)
+            
+            range_profiles.append(range_profile)
+        
+        # 转换为数组（脉冲×距离）
+        range_pulse_map = np.array(range_profiles)  # 脉冲在行，距离在列
+        
+        # 计算距离分辨率
+        range_resolution = params['range_resolution']
+        max_range = samples_per_pulse * range_resolution
+        
+        # 创建图表
+        fig, ax = plt.subplots(figsize=figsize)
+        
+        # 使用对数尺度显示
+        log_map = 10 * np.log10(range_pulse_map + 1e-9)  # 转换为dB尺度
+        
+        # 创建热图 - 横轴是距离，纵轴是脉冲序号
+        im = ax.imshow(log_map,
+                    aspect='auto',
+                    cmap=cmap,
+                    origin='lower',
+                    interpolation='nearest',
+                    extent=[0, max_range, 0, pulses])  # type: ignore
+        
+        # 添加颜色条
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.set_label('Magnitude (dB)', fontsize=12)
+        
+        # 设置坐标轴标签
+        ax.set_xlabel('Range (m)', fontsize=12)
+        ax.set_ylabel('Pulse Number', fontsize=12)
+        
+        # 设置x轴刻度（距离）
+        x_ticks = np.arange(0, max_range + 1, 500)
+        x_labels = [str(int(tick)) for tick in x_ticks]
+        ax.set_xticks(x_ticks)
+        ax.set_xticklabels(x_labels)
+        
+        # 设置y轴刻度（脉冲序号）
+        y_ticks = np.arange(0, pulses + 1, max(1, pulses // 10))
+        ax.set_yticks(y_ticks)
+        
+        # 添加网格
+        ax.grid(True, linestyle='--', alpha=0.3, color='gray')
+        
+        # 添加标题
+        ax.set_title(title, fontsize=14, pad=20)
+        
+        # 添加雷达参数信息
+        param_text = (
+            f"Range Resolution: {range_resolution:.2f} m\n"
+            f"Pulses: {pulses}\n"
+            f"Samples per Pulse: {samples_per_pulse}\n"
+            f"Max Range: {max_range:.1f} m"
+        )
+        ax.text(0.02, 0.98, param_text, transform=ax.transAxes,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.6))
+        
+        # 优化布局
+        plt.tight_layout()
+        
+        # 保存图像
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"Range-Pulse map saved to {save_path}")
+        
+        # 显示图像
+        if show:
+            plt.show()
+        
+        return fig
+
 def interactive_simulation():
     """
     交互式单帧仿真示例
@@ -1241,7 +1354,7 @@ def generate_rd_animation():
         fps=5,
         dpi=150,
         cmap="viridis"
-    )         
+    )    
 
         
 def main():
@@ -1298,7 +1411,16 @@ def main():
             cmap="jet",
             save_path=f"optimized_rd_map_{frame + 1}.png",
             show=True
-        )            
+        )  
+        
+        # 绘制距离-脉冲序号图
+        radar_sim.plot_range_pulse_map(
+            baseband=result['baseband'],
+            title="Range-Pulse Map",
+            cmap="jet",
+            save_path=f"range_pulse_map_{frame + 1}.png",
+            show=True
+        )                  
         
         # 更新目标用于下一帧
         current_targets = result['updated_targets']   
