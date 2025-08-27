@@ -274,7 +274,7 @@ class CognitiveRadarEnv(gym.Env):
                 radar_params[key] = float(value)  # 确保是浮点数        
 
         # Update radar parameters
-        print(radar_params)
+        # print(radar_params)
         self.simulator.update_radar(radar_params)
         self.simulator.reset_radar()
         # Update scene (target movement)
@@ -524,7 +524,7 @@ class CognitiveRadarEnv(gym.Env):
         return total_reward
     
     def _calculate_detection_reward(self, obs_dict: Dict, targets: List[Dict]) -> float:
-        """带详细调试输出的检测奖励函数"""
+        """使用峰值检测算法计算检测奖励"""
         processed_data = obs_dict['rd_map']
         total_reward = 0
         
@@ -533,32 +533,25 @@ class CognitiveRadarEnv(gym.Env):
         range_res = params.get('range_resolution', 0.5)
         doppler_res = params.get('doppler_resolution', 0.2)
         
-        # 噪声估计
-        noise_level = self._estimate_noise_floor(processed_data)
-        # noise_level = obs_dict.get('noise_floor', -100)
-        detection_threshold = noise_level + 2
+        # 使用雷达模拟器的峰值检测功能
+        peaks = self.simulator.find_peaks(processed_data, num_peaks=len(targets) + 2)
         
         print("="*50)
-        print(processed_data.shape)
-        print(f"噪声水平: {noise_level:.1f}dB, 检测阈值: {detection_threshold:.1f}dB")
+        print(f"检测到的峰值数量: {len(peaks)}")
+        print(f"RD图形状: {processed_data.shape}")
         print(f"距离分辨率: {range_res:.3f}m, 多普勒分辨率: {doppler_res:.3f}m/s")
         
-        peaks = self.simulator.find_peaks(processed_data,num_peaks=3)
-        print(peaks)
+        # 为每个目标寻找匹配的峰值
+        matched_targets = set()
+        matched_peaks = set()
+        
         for i, target in enumerate(targets):
             print(f"\n目标 #{i+1}:")
             x, y, z = target['location']
             print(f"位置: ({x:.1f}, {y:.1f}, {z:.1f})m")
             
-            # 计算距离
+            # 计算真实距离和径向速度
             true_range = np.sqrt(x**2 + y**2 + z**2)
-            print(f"真实距离: {true_range:.1f}m")
-            
-            
-            
-            # 计算距离单元
-            range_bin = int(np.clip(true_range / range_res, 0, processed_data.shape[0]-1))
-            print(f"距离单元: {range_bin}")
             
             # 计算径向速度
             radial_velocity = (
@@ -566,47 +559,109 @@ class CognitiveRadarEnv(gym.Env):
                 target['speed'][1] * (y/true_range) +
                 target['speed'][2] * (z/true_range) if true_range > 0 else 0
             )
-            print(f"径向速度: {radial_velocity:.1f}m/s")
             
-            # 计算多普勒单元
-            doppler_bin = int(np.clip(
-                radial_velocity / doppler_res, 
-                0, 
-                processed_data.shape[1]-1
+            print(f"真实距离: {true_range:.1f}m, 径向速度: {radial_velocity:.1f}m/s")
+            
+            # 计算对应的距离和多普勒单元
+            expected_range_bin = int(np.clip(true_range / range_res, 0, processed_data.shape[1]-1))
+            
+            # 多普勒索引计算（需要考虑多普勒域的对称性）
+            max_doppler = (processed_data.shape[0] // 2) * doppler_res
+            doppler_bin_float = radial_velocity / doppler_res
+            expected_doppler_bin = int(np.clip(
+                doppler_bin_float + processed_data.shape[0] // 2,
+                0,
+                processed_data.shape[0] - 1
             ))
-            print(f"多普勒单元: {doppler_bin}")
             
-            # 获取信号
-            signal_magnitude = np.abs(processed_data[range_bin, doppler_bin])
-            signal_db = 10 * np.log10(signal_magnitude + 1e-9)
-            print(f"信号幅度(dB): {signal_db:.1f}")
+            print(f"预期单元: 距离={expected_range_bin}, 多普勒={expected_doppler_bin}")
+            print(f"预期物理量: 距离={true_range:.1f}m, 速度={radial_velocity:.1f}m/s")
             
-            # 检查检测
-            if signal_db < detection_threshold:
-                print("⚠️ 未检测到: 信号低于阈值")
-                continue
+            # 寻找最匹配的峰值
+            best_match = None
+            best_distance = float('inf')
             
-            # 计算超过阈值的信号
-            excess_signal = signal_db - detection_threshold
-            print(f"超过阈值信号: {excess_signal:.1f}dB")
+            for j, peak in enumerate(peaks):
+                if j in matched_peaks:
+                    continue
+                
+                # 获取峰值的物理距离和速度
+                peak_range = peak['range']
+                peak_velocity = peak['velocity']
+                
+                # 计算物理距离差异（米和米/秒）
+                range_diff_m = abs(peak_range - true_range)
+                velocity_diff = abs(peak_velocity - radial_velocity)
+                
+                # 综合距离差异（加权）
+                distance = math.sqrt(range_diff_m**2 + (velocity_diff * 10)**2)  # 速度差异权重较大
+                
+                if distance < best_distance:
+                    best_distance = distance
+                    best_match = (peak, j)
             
-            # 距离衰减因子 (调整公式)
-            range_factor = 1.0 / (1.0 + (true_range/800)**2)  # 800米参考距离
-            print(f"距离衰减因子: {range_factor:.3f}")
-            
-            # RCS因子
-            rcs = target.get('rcs', 1.0)
-            print(f"RCS: {rcs:.1f}m²")
-            
-            # 目标奖励
-            target_reward = excess_signal * range_factor * rcs
-            print(f"目标奖励: {target_reward:.3f}")
-            total_reward += target_reward
+            # 检查是否找到匹配的峰值
+            match_threshold = 10.0  # 10米的匹配阈值（更严格）
+            if best_match and best_distance < match_threshold:
+                peak, peak_idx = best_match
+                matched_targets.add(i)
+                matched_peaks.add(peak_idx)
+                
+                # 计算信号强度
+                signal_db = peak['intensity']
+                print(f"匹配峰值: 距离={peak['range']:.1f}m, 速度={peak['velocity']:.1f}m/s")
+                print(f"信号强度: {signal_db:.1f}dB, SNR: {peak['snr']:.1f}dB")
+                
+                # 计算距离差异
+                range_error = abs(peak['range'] - true_range)
+                velocity_error = abs(peak['velocity'] - radial_velocity)
+                
+                print(f"距离误差: {range_error:.1f}m, 速度误差: {velocity_error:.1f}m/s")
+                
+                # 计算奖励（误差越小奖励越高）
+                range_accuracy = max(0, 1.0 - range_error / 20.0)  # 20米内完全准确
+                velocity_accuracy = max(0, 1.0 - velocity_error / 2.0)  # 2m/s内完全准确
+                
+                accuracy_score = (range_accuracy + velocity_accuracy) / 2
+                
+                # RCS因子和距离衰减
+                rcs = target.get('rcs', 1.0)
+                range_factor = 1.0 / (1.0 + (true_range/1000)**2)  # 1000米参考距离
+                
+                # 调整奖励值为更合理的范围
+                detection_bonus = 1.0  # 检测到目标的基础奖励（从5.0降低到1.0）
+                accuracy_bonus = accuracy_score * 0.5  # 准确性奖励（从3.0降低到0.5）
+                
+                target_reward = detection_bonus + accuracy_bonus
+                print(f"目标奖励: {target_reward:.3f} (基础: {detection_bonus:.1f}, 准确: {accuracy_bonus:.1f})")
+                total_reward += target_reward
+            else:
+                print(f"⚠️ 未找到匹配的峰值 (最近距离: {best_distance:.1f}m)")
+        
+        # 显示所有检测到的峰值信息
+        print(f"\n所有检测到的峰值:")
+        for j, peak in enumerate(peaks):
+            status = "已匹配" if j in matched_peaks else "未匹配"
+            print(f"峰值 {j}: 距离={peak['range']:.1f}m, 速度={peak['velocity']:.1f}m/s, "
+                f"强度={peak['intensity']:.1f}dB, {status}")
+        
+        # 额外奖励：检测到额外目标（误检惩罚较低）
+        extra_detections = len(peaks) - len(matched_peaks)
+        if extra_detections > 0:
+            extra_reward = extra_detections * 0.1  # 较小的正奖励（从0.5降低到0.1）
+            print(f"额外检测奖励: {extra_reward:.3f}")
+            total_reward += extra_reward
+        
+        # 未检测目标的惩罚
+        missed_targets = len(targets) - len(matched_targets)
+        if missed_targets > 0:
+            missed_penalty = missed_targets * -1.0  # 每个未检测目标惩罚（从-3.0降低到-1.0）
+            print(f"未检测惩罚: {missed_penalty:.3f}")
+            total_reward += missed_penalty
         
         print(f"总检测奖励: {total_reward:.3f}")
         print("="*50)
-        return float(total_reward)   
-
+        return float(total_reward)
 
     def _estimate_noise_floor(self, rd_map):
         """
@@ -918,14 +973,14 @@ def main():
     # 重置环境
     obs, info = env.reset()
     print("初始观测维度:", obs.shape)
-    print("初始信息:", info.keys())
+    # print("初始信息:", info.keys())
 
     # 随机策略测试
     for _ in range(10):
         action = env.action_space.sample()
         obs, reward, terminated, truncated, info = env.step(action)
         print(f"奖励: {reward:.4f}, 终止: {terminated}, 截断: {truncated}")
-        print(f"雷达参数: {info['beam_az']:.1f}°, {info['prf']:.1f}Hz")
+        print(f"雷达参数: beam_az {info['beam_az']:.1f}°, prf {info['prf']:.1f}Hz")
 
         if terminated or truncated:
             break

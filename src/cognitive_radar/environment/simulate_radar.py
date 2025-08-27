@@ -864,7 +864,6 @@ class RadarSimulator:
         # 保存图像
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"RD map saved to {save_path}")
 
         # 显示图像
         if show:
