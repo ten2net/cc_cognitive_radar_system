@@ -24,7 +24,7 @@ class CognitiveRadarEnv(gym.Env):
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any]={}, **kwargs):
         """
         Initialize the cognitive radar environment.
 
@@ -39,7 +39,50 @@ class CognitiveRadarEnv(gym.Env):
                 - reward_weights: Weights for reward components
         """
         super().__init__()
-        self.config = config        
+        
+        # 设置默认配置
+        default_config = {
+            "radar_type": "PD-LS02",
+            "max_steps": 500,
+            "time_step": 0.1,
+            "action_space": {
+                "type": "dict",
+                "dimensions": {
+                    "beam_control": 2,
+                    "waveform_params": 3,
+                    "gain_control": 1
+                }
+            },
+            "reward_weights": {
+                'detection': 1.0,
+                'power': -0.01,
+                'interference': -0.5,
+                'waveform': 0.1,
+                'beam': 0.5
+            },
+            "targets": [
+                {
+                    "model_type": "HIGH_SPEED_DRONE",
+                    "params": {
+                        "start_position": [900, 50, 50],
+                        "end_position": [1000, 200, 100],
+                        "cruise_speed": 30,
+                        "rcs": 0.5
+                    }
+                }
+            ]
+        }
+        
+        # 合并配置
+        if config is not None:
+            final_config = {**default_config, **config}
+        else:
+            final_config = default_config
+            
+        # 合并额外的关键字参数
+        final_config = {**final_config, **kwargs}
+        
+        self.config = final_config    
 
         # Create radar simulator and scene manager
         self.simulator = RadarSimulator(
@@ -56,13 +99,24 @@ class CognitiveRadarEnv(gym.Env):
         # Schedule targets based on config
         self._schedule_targets(config.get('targets', []))
 
-        # Define observation space
-        self.observation_space = gym.spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(config['state_dim'],),
-            dtype=np.float32
-        )
+        # 获取RD图形状和特征维度
+        self._get_observation_shapes()
+        
+        # Define observation space as Dict (不再使用flatten)
+        self.observation_space = gym.spaces.Dict({
+            'rd_map': gym.spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=self.rd_map_shape,
+                dtype=np.float32
+            ),
+            'features': gym.spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=(self.features_dim,),
+                dtype=np.float32
+            )
+        })
 
         # Define action space
         self._setup_action_space(config)
@@ -98,6 +152,31 @@ class CognitiveRadarEnv(gym.Env):
         # Initialize environment
         self.reset()
 
+    def _get_observation_shapes(self):
+        """获取RD图形状和特征维度"""
+        # 运行一次仿真来获取形状信息
+        self.simulator.reset_radar()
+        self.scenario_manager.clear_all_targets()
+        self._schedule_targets(self.config.get('targets', []))
+        self.scenario_manager.update(0.0)
+        targets = self.scenario_manager.get_targets()
+        
+        # 使用简单目标进行测试
+        test_targets = [
+            dict(location=(1000, 0, 100), speed=(-11.2, 0, 0), rcs=0.5, phase=0),
+            dict(location=(2000, 0, 100), speed=(30, 0, 0), rcs=0.5, phase=0)
+        ]
+        
+        baseband = self.simulator.simulate(test_targets)
+        obs_dict = self.simulator.get_observation(baseband)
+        
+        self.rd_map_shape = obs_dict['rd_map'].shape
+        self.features_dim = obs_dict['features'].shape[0]
+        
+        # 重置环境
+        self.simulator.reset_radar()
+        self.scenario_manager.clear_all_targets()
+
     def _schedule_targets(self, targets_config: List[Dict[str, Any]]):
         """Schedule targets based on configuration"""
         for target_config in targets_config:
@@ -120,7 +199,7 @@ class CognitiveRadarEnv(gym.Env):
             return value
         
         # 确保所有值都是标量
-        if 'freq_start' in transmitter.waveform_prop and 'bandwidth' in transmitter.waveform_prop:
+        if 'start' in transmitter.waveform_prop and 'bandwidth' in transmitter.waveformprop:
             freq_start = ensure_scalar(transmitter.waveform_prop['freq_start'])
             bandwidth = ensure_scalar(transmitter.waveform_prop['bandwidth'])
             self.frequency_range = [freq_start, freq_start + bandwidth]
@@ -249,7 +328,7 @@ class CognitiveRadarEnv(gym.Env):
 
         return params
 
-    def step(self, action: Any) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+    def step(self, action: Any) -> Tuple[Dict, float, bool, bool, Dict[str, Any]]:
         """
         Execute one time step in the environment.
 
@@ -274,7 +353,6 @@ class CognitiveRadarEnv(gym.Env):
                 radar_params[key] = float(value)  # 确保是浮点数        
 
         # Update radar parameters
-        # print(radar_params)
         self.simulator.update_radar(radar_params)
         self.simulator.reset_radar()
         # Update scene (target movement)
@@ -283,41 +361,22 @@ class CognitiveRadarEnv(gym.Env):
         # Get targets in standard format
         targets = self.scenario_manager.get_targets()
         
-        # target_1 = dict(location=(20 + 5*self.current_step, 0, 10 + 3*self.current_step), speed=(-1.2* self.current_step, 0, 0), rcs=0.5, phase=0)
-        # target_2 = dict(location=(70, 15*self.current_step, 8 + 2*self.current_step), speed=(-0.5 * self.current_step, 0, 0), rcs=0.5, phase=0)
-        # target_3 = dict(location=(30* self.current_step, -5, 0), speed=(-22, 0, 0), rcs=5, phase=0)
-
-        # targets = [target_1, target_2]    
+        # 使用测试目标
         target_1 = dict(location=(1000+ 100 * self.current_step , 0, 100), speed=(-11.2, 0, 0), rcs=0.5, phase=0)
         target_2 = dict(location=(2000 - 100 * self.current_step, 0, 100), speed=(30 , 0, 0), rcs=0.5, phase=0)
         targets = [target_1, target_2]             
-        # print(">>>>>>>>>>>>>>targets", targets)
+        
         # Run radar simulation
         baseband = self.simulator.simulate(targets)
 
         # Process radar data to get observation
         obs_dict = self.simulator.get_observation(baseband)
         
-
-        # 使用替代方法检测目标
-        rd_map =obs_dict['rd_map']
-        # peaks = self.simulator.find_peaks(rd_map,num_peaks=3)
-        # print(peaks)
-
-        # 绘制RD图
-        self.simulator.plot_rd_map(
-            rd_map=rd_map,
-            title="Optimized Radar Range-Doppler Map",
-            cmap="jet",
-            save_path=f"optimized_rd_map_{self.current_step}.png",
-            show=True
-        )        
-        
-        
-        obs = np.concatenate([
-            obs_dict['rd_map'].flatten(),
-            obs_dict['features']
-        ])
+        # 使用字典格式的观测值（不再flatten）
+        obs = {
+            'rd_map': obs_dict['rd_map'],
+            'features': obs_dict['features']
+        }
 
         # Update environment state
         self.current_step += 1
@@ -355,7 +414,7 @@ class CognitiveRadarEnv(gym.Env):
 
         return obs, reward, terminated, truncated, info
 
-    def reset(self, seed: Optional[int] = None, options: Optional[Dict] = None) -> Tuple[np.ndarray, Dict[str, Any]]:  # type: ignore
+    def reset(self, seed: Optional[int] = None, options: Optional[Dict] = None) -> Tuple[Dict, Dict[str, Any]]:
         """
         Reset the environment to its initial state.
 
@@ -395,10 +454,12 @@ class CognitiveRadarEnv(gym.Env):
 
         # Get initial observation
         obs_dict = self.simulator.get_observation(baseband)
-        obs = np.concatenate([
-            obs_dict['rd_map'].flatten(),
-            obs_dict['features']
-        ])
+        
+        # 使用字典格式的观测值（不再flatten）
+        obs = {
+            'rd_map': obs_dict['rd_map'],
+            'features': obs_dict['features']
+        }
 
         # Information dictionary
         info = {
@@ -925,7 +986,6 @@ def main():
     # 配置环境
     config = {
         "radar_type": "PD-LS02",
-        "state_dim": 1024,       # 示例值
         "max_steps": 500,
         "render_mode": "human",  # 可选
         "action_space": {
@@ -954,16 +1014,7 @@ def main():
                     "cruise_speed": -30,
                     "rcs": 0.5
                 }
-            },
-            # {
-            #     "model_type": MotionModelType.SWARM,
-            #     "params": {
-            #         "num_targets": 1,
-            #         "x_center": -1000,
-            #         "y_center": -2000,
-            #         "area_size": 20
-            #     }
-            # }
+            }
         ]
     }
 
@@ -972,11 +1023,12 @@ def main():
 
     # 重置环境
     obs, info = env.reset()
-    print("初始观测维度:", obs.shape)
-    # print("初始信息:", info.keys())
+    print("初始观测类型:", type(obs))
+    print("RD图形状:", obs['rd_map'].shape)
+    print("特征维度:", obs['features'].shape)
 
     # 随机策略测试
-    for _ in range(10):
+    for _ in range(3):
         action = env.action_space.sample()
         obs, reward, terminated, truncated, info = env.step(action)
         print(f"奖励: {reward:.4f}, 终止: {terminated}, 截断: {truncated}")

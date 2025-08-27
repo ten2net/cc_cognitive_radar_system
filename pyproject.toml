@@ -52,6 +52,11 @@ radar_system = "cognitive_radar.radar_system.default_radar_system:main"
 radar_factory = "cognitive_radar.radar_system.radar_factory:main"
 scene = "cognitive_radar.scene.scenario_manager:main"
 
+[project.entry-points."gymnasium.envs"]
+"CognitiveRadar-v0" = "cognitive_radar.environment:CognitiveRadarEnv"
+"CognitiveRadar-v1" = "cognitive_radar.environment:CognitiveRadarEnv"
+"CognitiveRadar-v2" = "cognitive_radar.environment:make_radar_env"
+
 [build-system]
 requires = ["uv_build"]  
 build-backend = "uv_build"  
