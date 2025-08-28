@@ -44,6 +44,13 @@ class MotionModelFactory:
             MotionModelType.SWARM: MotionModelFactory._create_swarm
         }
         
+        # 如果传入的是字符串，尝试转换为枚举
+        if isinstance(model_type, str):
+            try:
+                model_type = MotionModelType(model_type.lower())
+            except ValueError:
+                raise ValueError(f"Unknown motion model type: {model_type}")        
+        
         if model_type not in model_creators:
             raise ValueError(f"Unknown motion model type: {model_type}")
             
