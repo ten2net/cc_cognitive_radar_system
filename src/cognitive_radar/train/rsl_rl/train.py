@@ -17,6 +17,8 @@ from rsl_rl.algorithms import PPO
 import cognitive_radar.environment
 import gc  # 垃圾回收
 import time
+import glob
+from torch.utils.tensorboard import SummaryWriter
 
 class RadarFeatureExtractor(nn.Module):
     """处理雷达多模态输入的特征提取器（极致内存优化版）"""
@@ -426,6 +428,32 @@ def create_envs(config: Dict) -> RadarVecEnv:
         num_envs=num_envs,
         config=env_config
     )
+    
+def get_next_run_dir(base_dir="runs/radar_training"):
+    """获取下一个可用的运行目录"""
+    # 确保基础目录存在
+    os.makedirs(base_dir, exist_ok=True)
+    
+    # 查找所有现有运行目录
+    existing_runs = glob.glob(os.path.join(base_dir, "radar_training*"))
+    
+    # 提取现有编号
+    run_numbers = []
+    for run in existing_runs:
+        try:
+            num = int(run.split("_")[-1])
+            run_numbers.append(num)
+        except ValueError:
+            continue
+    
+    # 确定下一个编号
+    next_number = max(run_numbers) + 1 if run_numbers else 1
+    
+    # 创建新目录
+    new_dir = os.path.join(base_dir, f"radar_training_{next_number}")
+    os.makedirs(new_dir, exist_ok=True)
+    
+    return new_dir    
 
 def train(config_path: str = "config/radar_config.yaml"):
     """主训练函数（多环境并行版）"""
@@ -438,6 +466,11 @@ def train(config_path: str = "config/radar_config.yaml"):
     
     print(f"配置: 训练迭代数={original_iterations} -> 实际使用={config['training']['iterations']}")
     
+    # 创建 TensorBoard 记录器
+    # 创建唯一的日志目录
+    log_dir = get_next_run_dir("rl_logs")
+    writer = SummaryWriter(log_dir=log_dir)
+        
     # 创建环境
     env = create_envs(config)
     num_envs = env.num_envs
@@ -470,7 +503,7 @@ def train(config_path: str = "config/radar_config.yaml"):
     )
     
     # 初始化存储 - 确保容量足够大
-    max_steps = min(200, config['environment'].get('max_steps', 1000))
+    max_steps = min(5, config['environment'].get('max_steps', 1000))
     obs_example = torch.zeros(num_envs, actor_critic.features_dim, device=device)
     
     # 正确初始化存储，包含值函数存储
@@ -492,10 +525,17 @@ def train(config_path: str = "config/radar_config.yaml"):
     torch.backends.cudnn.benchmark = True
     torch.autograd.set_detect_anomaly(False)
     
+    # 记录训练开始时间
+    start_time = time.time()    
+    
     for iteration in range(config['training']['iterations']):
         # 重置环境
         obs = env.reset()
-        episode_rewards = np.zeros(num_envs)
+        # 初始化跟踪变量
+        env_rewards = np.zeros(env.num_envs)  # 每个环境的累积奖励
+        env_steps = np.zeros(env.num_envs, dtype=int)  # 每个环境的步数计数器
+        completed_episodes = []  # 完成的回合列表
+        total_iteration_reward = 0  # 迭代总奖励
         
         # 记录初始内存使用
         if device == 'cuda':
@@ -535,27 +575,42 @@ def train(config_path: str = "config/radar_config.yaml"):
             # 处理环境步骤
             ppo.process_env_step(next_obs, rewards, dones, {})
             
+            # 累积奖励和步数
+            env_rewards += rewards.cpu().numpy()
+            env_steps += 1
+            
+            # 累加迭代总奖励
+            total_iteration_reward += np.sum(rewards.cpu().numpy())            
+            
+            # 检查终止的环境
+            done_indices = np.where(dones.cpu().numpy())[0]
+            for idx in done_indices:
+                # 记录完成的回合
+                completed_episodes.append({
+                    'env_id': idx,
+                    'reward': env_rewards[idx],
+                    'length': env_steps[idx],
+                    'iteration': iteration
+                })
+                
+                # 重置该环境的累积奖励和步数
+                env_rewards[idx] = 0
+                env_steps[idx] = 0            
+            
             # 更新观测
             obs = next_obs
-            
-            # 记录奖励
-            episode_rewards += rewards.cpu().numpy()
-            
+                        
             # 显式释放内存
             del obs_tensor, features, policy_obs, actions_tensor
             gc.collect()
             if device == 'cuda':
                 torch.cuda.empty_cache()
-            
+                
             # 如果所有环境都结束，提前终止
             if dones.all():
                 break
             
-            # 每10步记录一次内存使用
-            if step % 10 == 0 and device == 'cuda':
-                print(f"Step {step}: 内存使用: {torch.cuda.memory_allocated()/1024**2:.2f} MB")
-        
-        # 计算回报 - 确保传入的是特征向量
+         # 计算回报 - 确保传入的是特征向量
         # 将当前观测移动到设备
         obs_device = obs.to(device)
         with torch.no_grad():
@@ -572,22 +627,88 @@ def train(config_path: str = "config/radar_config.yaml"):
         
         # 使用混合精度更新策略
         with torch.autocast(device_type="cuda" if device == 'cuda' else "cpu", enabled=device == 'cuda'):   
-            loss_dict = ppo.update()
+            loss_dict = ppo.update()            
+            
         
+        # 处理未完成的回合
+        for i in range(env.num_envs):
+            if env_steps[i] > 0:  # 未完成但有数据
+                completed_episodes.append({
+                    'env_id': i,
+                    'reward': env_rewards[i],
+                    'length': env_steps[i],
+                    'iteration': iteration,
+                    'incomplete': True
+                })
+        
+        # 计算迭代指标
+        # 1. 迭代总奖励
+        writer.add_scalar('Reward/Total_Reward', total_iteration_reward, iteration)
+        # 初始化默认值
+        mean_episode_reward = 0
+        mean_episode_length = 0
+        episodes_completed = 0        
+        # 2. 平均回合奖励（仅计算完成的回合）
+        if completed_episodes:
+            # 筛选完成的回合
+            complete_episodes = [ep for ep in completed_episodes if 'incomplete' not in ep]
+            
+            if complete_episodes:
+                episode_rewards = [ep['reward'] for ep in complete_episodes]
+                mean_episode_reward = np.mean(episode_rewards)
+                writer.add_scalar('Reward/Mean_Episode_Reward', mean_episode_reward, iteration)
+                
+                # 记录回合奖励分布
+                writer.add_histogram('Histogram/Episode_Reward_Distribution', np.array(episode_rewards), iteration)
+            
+            # 3. 平均回合长度
+            episode_lengths = [ep['length'] for ep in complete_episodes]
+            mean_episode_length = np.mean(episode_lengths) if episode_lengths else 0
+            writer.add_scalar('Metrics/Mean_Episode_Length', mean_episode_length, iteration)
+            
+            # 4. 完成的回合数
+            episodes_completed = len(complete_episodes)
+            writer.add_scalar('Metrics/Episodes_Completed', episodes_completed, iteration)
+        
+        # 记录每个环境的详细数据
+        for ep in completed_episodes:
+            # 累积奖励
+            writer.add_scalar(f'Reward/Episode_Reward/Env_{ep["env_id"]}', 
+                             ep['reward'], ep['iteration'] * env.num_envs + ep['env_id'])
+            
+            # 回合长度
+            writer.add_scalar(f'Metrics/Episode_Length/Env_{ep["env_id"]}', 
+                             ep['length'], ep['iteration'] * env.num_envs + ep['env_id'])   
+
+        # 记录训练指标
+        writer.add_scalar('Train/Value_Loss', loss_dict['value_function'], iteration)
+        writer.add_scalar('Train/Surrogate_Loss', loss_dict['surrogate'], iteration)
+        writer.add_scalar('Train/Entropy_Loss', loss_dict['entropy'], iteration)
+        for i, param_group in enumerate(ppo.optimizer.param_groups):
+            writer.add_scalar(f'Train/Learning_Rate/Group_{i}', param_group['lr'], iteration)
+        
+        # 记录内存使用情况
+        if device == 'cuda':
+            writer.add_scalar('Memory/GPU_Allocated_MB', torch.cuda.memory_allocated()/1024**2, iteration)
+            writer.add_scalar('Memory/GPU_Reserved_MB', torch.cuda.memory_reserved()/1024**2, iteration)
+        
+        # 添加参数分布直方图记录  
+        if iteration % 10 == 0:
+            for name, param in actor_critic.named_parameters():
+                writer.add_histogram(f"Histogram/{name}", param, iteration)  
+                
         # 释放内存
         del obs, obs_device
         gc.collect()
         if device == 'cuda':
-            torch.cuda.empty_cache()
-        
-        # 计算平均奖励
-        mean_reward = np.mean(episode_rewards) / max_steps
-        
+            torch.cuda.empty_cache()   
+                                       
         # 打印训练进度
-        print(f"Iteration {iteration+1}/{config['training']['iterations']}, "
-              f"Mean Reward: {mean_reward:.2f}, "
-              f"Value Loss: {loss_dict['value_function']:.4f}, "
-              f"Surrogate Loss: {loss_dict['surrogate']:.4f}")
+        print(f"Iteration {iteration+1}/{config['training']['iterations']}: "
+              f"Total Reward: {total_iteration_reward:.2f}, "
+              f"Mean Episode Reward: {mean_episode_reward:.2f}, "
+              f"Mean Length: {mean_episode_length:.1f}, "
+              f"Episodes: {episodes_completed}")        
         
         # 保存模型
         if (iteration + 1) % max(1, config['training']['save_interval']) == 0:
@@ -596,13 +717,19 @@ def train(config_path: str = "config/radar_config.yaml"):
                 'policy_state_dict': ppo.policy.state_dict(),
                 'optimizer_state_dict': ppo.optimizer.state_dict(),
                 'iteration': iteration,
-                'mean_reward': mean_reward
+                'ep_reward': total_iteration_reward
             }, model_path)
             print(f"模型已保存到 {model_path}")
     
     # 关闭环境
     env.close()
-    print("训练完成!")
+    
+    # 记录总训练时间
+    total_time = time.time() - start_time
+    print(f"训练完成! 总耗时: {total_time/60:.2f} 分钟")
+    
+    # 关闭TensorBoard写入器
+    writer.close()
 
 def evaluate(model_path: str, config_path: str = "config/radar_config.yaml"):
     """评估训练好的模型（内存优化版本）"""
