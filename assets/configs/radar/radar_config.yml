@@ -170,3 +170,85 @@ radars:
     location: [0, 0, 5]
     speed: [0, 0, 0]
     description: "微型化设计，深度学习目标分类"
+# 雷达环境配置
+environment:
+  env_name: "CognitiveRadar-v1"
+  max_steps: 1000
+
+# 训练配置
+training:
+  iterations: 1000
+  episodes_per_iteration: 10
+  num_envs: 4
+  save_interval: 100
+
+# 网络架构配置
+network:
+  hidden_dims: [256, 128]
+  activation: "elu"
+
+# PPO算法参数
+algorithm:
+  learning_rate: 3e-4
+  clip_range: 0.2
+  entropy_coef: 0.01
+  value_coef: 0.5
+  max_grad_norm: 1.0
+  gamma: 0.99
+  lam: 0.95
+  num_mini_batches: 8
+  num_learning_epochs: 5
+
+# 雷达系统参数
+radar:
+  frequency: 24e9  # 24 GHz
+  bandwidth: 500e6  # 500 MHz
+  prf: 10e3  # 10 kHz
+  pulse_width: 1e-6  # 1 μs
+  antenna_gain: 30  # 30 dBi
+  noise_figure: 3  # 3 dB
+
+# 目标参数
+targets:
+  min_rcs: 0.1  # 最小雷达截面积 (m²)
+  max_rcs: 10.0  # 最大雷达截面积 (m²)
+  min_speed: 5.0  # 最小速度 (m/s)
+  max_speed: 100.0  # 最大速度 (m/s)
+  min_distance: 50.0  # 最小距离 (m)
+  max_distance: 2000.0  # 最大距离 (m)
+
+# 奖励函数权重
+rewards:
+  detection_weight: 1.0
+  false_alarm_penalty: -0.5
+  energy_penalty: -0.01
+  tracking_weight: 0.5
+  classification_weight: 0.2
+
+# 观测空间配置
+observation:
+  rd_map_shape: [64, 64]  # RD图分辨率
+  feature_dim: 10  # 特征向量维度
+  normalize: true  # 是否归一化观测值
+
+# 动作空间配置
+action:
+  beam_control_range: [-30, 30]  # 波束控制角度范围 (度)
+  waveform_params_range:  # 波形参数范围
+    prf: [1e3, 20e3]  # PRF范围 (Hz)
+    pulse_width: [0.1e-6, 10e-6]  # 脉冲宽度范围 (s)
+    bandwidth: [10e6, 1000e6]  # 带宽范围 (Hz)
+  gain_control_range: [0, 1]  # 增益控制范围
+
+# 评估配置
+evaluation:
+  num_episodes: 5
+  render: true
+  save_video: false
+  video_path: "videos/"
+
+# 日志配置
+logging:
+  log_dir: "logs/"
+  tensorboard: true
+  verbose: true    

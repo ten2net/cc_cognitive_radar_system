@@ -151,7 +151,7 @@ class CognitiveRadarEnv(gym.Env):
 
         # Initialize environment
         self.reset()
-
+        
     def _get_observation_shapes(self):
         """获取RD图形状和特征维度"""
         # 运行一次仿真来获取形状信息
@@ -263,32 +263,84 @@ class CognitiveRadarEnv(gym.Env):
                 dtype=np.float32
             )
             self._action_mapping = self._map_flat_action
-
+            
     def _map_dict_action(self, action: Dict[str, np.ndarray]) -> Dict[str, float]:
-        """Map dictionary action to radar parameters"""
-        params = {}
-
+        """Map dictionary action to radar parameters with enhanced numerical stability"""
+        # 验证输入动作值
+        if np.isnan(action['beam_control']).any() or np.isinf(action['beam_control']).any():
+            print(f"警告: beam_control 包含 NaN 或 Inf 值! 使用零值替代")
+            action['beam_control'] = np.zeros_like(action['beam_control'])
+        
+        if np.isnan(action['waveform_params']).any() or np.isinf(action['waveform_params']).any():
+            print(f"警告: waveform_params 包含 NaN 或 Inf 值! 使用零值替代")
+            action['waveform_params'] = np.zeros_like(action['waveform_params'])
+        
+        if np.isnan(action['gain_control']).any() or np.isinf(action['gain_control']).any():
+            print(f"警告: gain_control 包含 NaN 或 Inf 值! 使用零值替代")
+            action['gain_control'] = np.zeros_like(action['gain_control'])
+        
+        # 限制动作值在[-1,1]范围内
+        beam_control = np.clip(action['beam_control'], -1.0, 1.0)
+        waveform_params = np.clip(action['waveform_params'], -1.0, 1.0)
+        gain_control = np.clip(action['gain_control'], -1.0, 1.0)
+        
         # Beam control
-        params['beam_az'] = action['beam_control'][0] * self.max_beam_angle
-        params['beam_el'] = action['beam_control'][1] * self.max_beam_angle
+        params = {}
+        params['beam_az'] = beam_control[0] * self.max_beam_angle
+        params['beam_el'] = beam_control[1] * self.max_beam_angle
+        
         # Waveform parameters
         freq_min, freq_max = self.frequency_range
         pw_min, pw_max = self.pulse_width_range
         prf_min, prf_max = self.prf_range
-
-        params['frequency'] = freq_min + \
-            (freq_max - freq_min) * (0.5 * (action['waveform_params'][0] + 1))
- 
-        params['pulse_width'] = pw_min + \
-            (pw_max - pw_min) * (0.5 * (action['waveform_params'][1] + 1))
-        params['prf'] = prf_min + (prf_max - prf_min) * \
-            (0.5 * (action['waveform_params'][2] + 1))
-
+        
+        # 确保频率计算在有效范围内
+        freq_factor = 0.5 * (waveform_params[0] + 1)
+        freq_factor = np.clip(freq_factor, 0.0, 1.0)
+        params['frequency'] = freq_min + (freq_max - freq_min) * freq_factor
+        if params['frequency'] < freq_min or params['frequency'] > freq_max:
+            # 使用更严格的限制方法
+            params['frequency'] = np.clip(params['frequency'], freq_min, freq_max)        
+        
+        # 确保脉冲宽度计算在有效范围内
+        pw_factor = 0.5 * (waveform_params[1] + 1)
+        pw_factor = np.clip(pw_factor, 0.0, 1.0)
+        params['pulse_width'] = pw_min + (pw_max - pw_min) * pw_factor
+        
+        # 确保PRF计算在有效范围内
+        prf_factor = 0.5 * (waveform_params[2] + 1)
+        prf_factor = np.clip(prf_factor, 0.0, 1.0)
+        params['prf'] = prf_min + (prf_max - prf_min) * prf_factor
+        
         # Gain control
         gain_min, gain_max = self.gain_range
-        params['gain'] = gain_min + \
-            (gain_max - gain_min) * (0.5 * (action['gain_control'][0] + 1))
-        return params
+        gain_factor = 0.5 * (gain_control[0] + 1)
+        gain_factor = np.clip(gain_factor, 0.0, 1.0)
+        params['gain'] = gain_min + (gain_max - gain_min) * gain_factor
+        
+        # 验证参数有效性
+        if params['pulse_width'] <= 0:
+            print(f"警告: 脉冲宽度无效 ({params['pulse_width']})，使用最小值 {pw_min}")
+            params['pulse_width'] = pw_min
+        
+        if params['prf'] <= 0:
+            print(f"警告: PRF无效 ({params['prf']})，使用最小值 {prf_min}")
+            params['prf'] = prf_min
+        
+        # 确保频率在范围内
+        if params['frequency'] < freq_min or params['frequency'] > freq_max:
+            print(f"警告: 频率无效 ({params['frequency']})，限制在范围内 {freq_min}-{freq_max}")
+            params['frequency'] = np.clip(params['frequency'], freq_min, freq_max)
+        
+        # 使用float32确保数值精度
+        return {
+            'beam_az': float(params['beam_az']),
+            'beam_el': float(params['beam_el']),
+            'frequency': float(params['frequency']),
+            'pulse_width': float(params['pulse_width']),
+            'prf': float(params['prf']),
+            'gain': float(params['gain'])
+        }            
 
     def _map_flat_action(self, action: np.ndarray) -> Dict[str, float]:
         """将平面动作向量映射到雷达参数"""
@@ -344,6 +396,7 @@ class CognitiveRadarEnv(gym.Env):
         """
         # Map action to radar parameters
         radar_params = self._action_mapping(action)
+        
         # 确保所有参数都是标量
         for key in radar_params:
             value = radar_params[key]
@@ -362,9 +415,9 @@ class CognitiveRadarEnv(gym.Env):
         targets = self.scenario_manager.get_targets()
         
         # 使用测试目标
-        target_1 = dict(location=(1000+ 100 * self.current_step , 0, 100), speed=(-11.2, 0, 0), rcs=0.5, phase=0)
-        target_2 = dict(location=(2000 - 100 * self.current_step, 0, 100), speed=(30 , 0, 0), rcs=0.5, phase=0)
-        targets = [target_1, target_2]             
+        # target_1 = dict(location=(1000+ 100 * self.current_step , 0, 100), speed=(-110.2, 0, 0), rcs=0.5, phase=0)
+        # target_2 = dict(location=(2000 - 100 * self.current_step, 0, 100), speed=(90 , 0, 0), rcs=0.5, phase=0)
+        # targets = [target_1, target_2]             
         
         # Run radar simulation
         baseband = self.simulator.simulate(targets)
@@ -457,8 +510,8 @@ class CognitiveRadarEnv(gym.Env):
         
         # 使用字典格式的观测值（不再flatten）
         obs = {
-            'rd_map': obs_dict['rd_map'],
-            'features': obs_dict['features']
+            'rd_map': obs_dict['rd_map'].astype(np.float32),
+            'features': obs_dict['features'].astype(np.float32)
         }
 
         # Information dictionary

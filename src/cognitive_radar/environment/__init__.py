@@ -84,27 +84,6 @@ register(
     }
 )
 
-# 环境工厂函数
-def make_radar_env(**kwargs):
-    """
-    创建雷达环境的工厂函数
-    
-    Args:
-        **kwargs: 传递给CognitiveRadarEnv的参数
-        
-    Returns:
-        CognitiveRadarEnv实例
-    """
-    from cognitive_radar.environment.radar_env import CognitiveRadarEnv
-    return CognitiveRadarEnv(**kwargs)
-
-# 注册工厂函数环境
-register(
-    id='CognitiveRadar-v2',
-    entry_point='cognitive_radar.environment:make_radar_env',
-    max_episode_steps=500,
-)
-
 __all__ = [
     'SceneModel', 'Terrain', 'Building', 'Vegetation',
     'ClutterModel', 'ConstantClutterModel', 'EmpiricalClutterModel', 'RadarClutterSimulator',

@@ -28,3 +28,5 @@ logs/
 radarsimpy/
 outputs/
 results/
+*.png
+radar_tensorboard/

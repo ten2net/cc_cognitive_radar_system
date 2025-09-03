@@ -39,11 +39,32 @@ class RadarSimulator:
         self.radar = self.default_radar
         self.last_simulation = None
         self.last_obs = None
-
-    def update_radar(self, params: Dict = {}):
-        self.radar = None
-        # 根据参数重建雷达
-        self.radar = DefaultRadarFactory().create(self.radar_type, params=params)
+        
+    def update_radar(self, params: Dict[str, float]):
+        """更新雷达参数并验证有效性"""
+        # 验证参数有效性
+        if params['pulse_width'] <= 0:
+            print(f"警告: 脉冲宽度无效 ({params['pulse_width']})")
+            # params['pulse_width'] = self.pulse_width_range[0]
+        
+        if params['prf'] <= 0:
+            print(f"警告: PRF无效 ({params['prf']})")
+            # params['prf'] = self.prf_range[0]
+        
+        # # 确保频率在范围内
+        # freq_min, freq_max = self.frequency_range
+        # if params['frequency'] < freq_min or params['frequency'] > freq_max:
+        #     print(f"警告: 频率无效 ({params['frequency']})，限制在范围内 {freq_min}-{freq_max}")
+        #     params['frequency'] = np.clip(params['frequency'], freq_min, freq_max)
+        
+        # # 确保增益在范围内
+        # gain_min, gain_max = self.gain_range
+        # if params['gain'] < gain_min or params['gain'] > gain_max:
+        #     print(f"警告: 增益无效 ({params['gain']})，限制在范围内 {gain_min}-{gain_max}")
+        #     params['gain'] = np.clip(params['gain'], gain_min, gain_max)
+        
+        # 更新雷达
+        self.radar = DefaultRadarFactory().create(self.radar_type, params=params)        
 
     def simulate(self, targets: list) -> np.ndarray:
         """Run radar simulation with current parameters"""
@@ -156,13 +177,16 @@ class RadarSimulator:
     def get_observation(self, baseband: np.ndarray) -> Dict:
         """Generate observation from raw radar data"""
         rd_map = self.process_signals(baseband)
+        
+        # 将复数转换为幅度（实数）
+        rd_map = np.abs(rd_map)  # 或者使用 np.abs(rd_map)**2 表示功率        
 
         features = self.extract_features(rd_map)
 
         self.last_obs = {
             'raw_data': baseband,
-            'rd_map': rd_map,
-            'features': features
+            'rd_map': rd_map.astype(np.float32),
+            'features': features.astype(np.float32)
         }
 
         return self.last_obs
