@@ -834,8 +834,15 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print(f"使用配置文件: {args.config}")
     if args.train:
-        train(args.config)
+        try:
+            train(args.config)
+        except KeyboardInterrupt:
+            pass   
     elif args.eval:
-        evaluate(args.eval, args.config)
+        try:
+            evaluate(args.eval, args.config)
+        except KeyboardInterrupt:
+            pass         
     else:
         print("请指定 --train 或 --eval 参数")
+    
