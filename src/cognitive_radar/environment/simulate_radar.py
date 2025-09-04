@@ -181,7 +181,8 @@ class RadarSimulator:
         # 将复数转换为幅度（实数）
         rd_map = np.abs(rd_map)  # 或者使用 np.abs(rd_map)**2 表示功率        
 
-        features = self.extract_features(rd_map)
+        # 提取特征 - 获取最多3个峰值的特征
+        features = self.extract_features(rd_map, num_peaks=3)
 
         self.last_obs = {
             'raw_data': baseband,
@@ -191,22 +192,82 @@ class RadarSimulator:
 
         return self.last_obs
 
-    def extract_features(self, rd_map: np.ndarray) -> np.ndarray:
-        """Extract features from processed radar data"""
-        # Peak detection
-        max_val = np.max(rd_map)
-        max_idx = np.unravel_index(np.argmax(rd_map), rd_map.shape)
-
-        # Statistical features
-        mean_val = np.mean(rd_map)
-        std_val = np.std(rd_map)
-        energy = np.sum(rd_map**2)
-
-        # Number of detections above threshold
-        threshold = mean_val + 2 * std_val
-        detections = np.sum(rd_map > threshold)
-
-        return np.array([max_val, *max_idx, mean_val, std_val, energy, detections])
+    def extract_features(self, rd_map: np.ndarray, num_peaks: int = 3) -> np.ndarray:
+        """
+        优化后的特征提取方法，只保留最有用的特征
+        
+        参数:
+        - rd_map: 处理后的距离-多普勒图
+        - num_peaks: 要提取的最大峰值数量
+        
+        返回:
+        - 包含特征值的NumPy数组
+        """
+        # 计算幅度(dB尺度)
+        magnitude = np.abs(rd_map)
+        db_magnitude = 10 * np.log10(magnitude + 1e-9)  # 转换为dB尺度
+        
+        # 获取雷达参数
+        params = self.get_current_radar_params()
+        max_range = params['max_unambiguous_range']
+        max_velocity = params['max_unambiguous_velocity']
+        
+        # 计算噪声基底
+        noise_floor = np.percentile(db_magnitude, 25)
+        
+        # 检测峰值
+        peaks = self.find_peaks(rd_map, num_peaks=num_peaks)
+        
+        # 提取峰值特征
+        peak_features = []
+        for i, peak in enumerate(peaks[:num_peaks]):
+            peak_features.extend([
+                peak['range'] / max_range,        # 归一化距离
+                peak['velocity'] / max_velocity,  # 归一化速度
+                peak['intensity'],                # 强度
+                peak['snr'],                      # 信噪比
+                peak['local_contrast']            # 局部对比度
+            ])
+        
+        # 如果检测到的峰值少于请求的数量，用0填充
+        while len(peak_features) < num_peaks * 5:
+            peak_features.append(0.0)
+        
+        # 提取最有用的全局特征
+        max_val = np.max(db_magnitude)
+        mean_val = np.mean(db_magnitude)
+        std_val = np.std(db_magnitude)
+        
+        # 计算信噪比分布
+        snr_map = db_magnitude - noise_floor
+        mean_snr = np.mean(snr_map[snr_map > 0])
+        max_snr = np.max(snr_map)
+        
+        # 计算目标密度（使用峰值数量）
+        target_density = len(peaks) / (rd_map.shape[0] * rd_map.shape[1])
+        
+        # 计算信号动态范围
+        dynamic_range = max_val - noise_floor
+        
+        # 计算信号峰均比（PAPR）
+        papr = max_val - mean_val
+        
+        # 组合最有用的特征
+        features = [
+            mean_val,           # 平均值 (dB)
+            std_val,            # 标准差 (dB)
+            noise_floor,        # 噪声基底 (dB)
+            mean_snr,           # 平均信噪比 (dB)
+            max_snr,            # 最大信噪比 (dB)
+            dynamic_range,      # 动态范围 (dB)
+            papr,               # 峰均比 (dB)
+            target_density      # 目标密度（基于峰值数量）
+        ]
+        
+        # 添加峰值特征
+        features.extend(peak_features)
+        
+        return np.array(features)
 
     def get_current_radar_params(self) -> Dict:
         params = {}
@@ -1296,8 +1357,6 @@ def interactive_simulation():
     radar_sim.clear_results()
     current_targets = targets.copy()
     
-    print("交互式仿真模式 - 按回车继续下一帧，输入 'q' 退出")
-    
     frame_idx = 0
     while True:
         user_input = input(f"帧 {frame_idx + 1} - 按回车继续或输入 'q' 退出: ")
@@ -1499,20 +1558,22 @@ if __name__ == "__main__":
     # 选择不同的运行模式
     print("选择运行模式:")
     print("1. 基本单帧仿真")
-    print("2. 交互式仿真")
+    print("2. 交互式单步仿真")
     print("3. 实时可视化")
     print("4. 生成仿真动画")
-    
-    choice = input("输入选择 (1-4): ")
-    
-    if choice == "1":
-        main()
-    elif choice == "2":
-        interactive_simulation()
-    elif choice == "3":
-        real_time_visualization()
-    elif choice == "4":
-        generate_rd_animation()
-    else:
-        print("无效选择，运行基本模式")
-        main()
+
+    try:
+        choice = input("输入选择 (1-4): ")    
+        if choice == "1":
+            main()
+        elif choice == "2":
+            interactive_simulation()
+        elif choice == "3":
+            real_time_visualization()
+        elif choice == "4":
+            generate_rd_animation()
+        else:
+            print("无效选择，运行基本模式")
+            main()
+    except KeyboardInterrupt:
+        pass        
