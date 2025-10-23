@@ -168,7 +168,7 @@
 
 1. 克隆仓库：
 ```bash
-git clone https://github.com/yourusername/cognitive_radar_system.git
+git clone https://github.com/ten2net/cognitive_radar_system.git
 cd cognitive_radar_system
 ```
 
@@ -191,7 +191,9 @@ pip install -r requirements.txt
 
 1. 训练模型：
 ```bash
-python scripts/rsl_rl/train_.py --train --config assets/configs/radar/radar_config.yml
+uv run -m cognitive_radar.train.rsl_rl.train --train
+或
+uv run -m cognitive_radar.train.sb3.train --train
 ```
 
 2. 评估模型：
